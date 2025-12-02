@@ -1,0 +1,64 @@
+# ------------------------------------
+# 1. DEPENDENCY AND ENVIRONMENT FILES
+# ------------------------------------
+
+# Python Virtual Environment
+# Ignores the folder where Python packages are installed (usually created with `python -m venv venv`)
+venv/
+.venv/
+
+# Environment Variables (Contains API keys and secrets)
+# This is crucial, as you have NWS_USER_AGENT and potentially other keys here.
+.env
+.env.*
+
+# Python compilation files
+__pycache__/
+*.pyc
+*.$py.class
+
+# pip installer logs
+pip-log.txt
+pip-delete-this-file.txt
+
+# ------------------------------------
+# 2. OPERATING SYSTEM & EDITOR FILES
+# ------------------------------------
+
+# Windows files
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# macOS files
+.DS_Store
+
+# IDE and Editor files (if you use VS Code, PyCharm, etc.)
+.vscode/
+.idea/
+
+# ------------------------------------
+# 3. PROJECT-SPECIFIC OUTPUTS
+# ------------------------------------
+
+# If your bot generates any output or log files, ignore them here.
+# Example if the bot writes logs:
+/logs/
+*.log
+
+# Example if the bot generates reports or output files:
+/output/
+*.json.bak
+*.html.bak
+
+# ------------------------------------
+# 4. CONFIGURATION FILE MANAGEMENT
+# ------------------------------------
+
+# The 'config/city_zones.py' file has been updated by the script. 
+# While you generally want to track config files, if you find your script
+# is frequently overwriting and generating unnecessary commit noise, you 
+# might consider ignoring it IF it can be safely regenerated.
+# However, since it holds the critical lat/lon data, it's usually best to track it.
+# If you want to stop Git from tracking changes to this file without ignoring it entirely:
+# git update-index --assume-unchanged config/city_zones.py
