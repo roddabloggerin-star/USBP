@@ -23,14 +23,29 @@ jobs:
     - name: ⬇️ Checkout Repository
       uses: actions/checkout@v4
 
-    # ... (Setup Python and Install Dependencies steps follow here) ...
+    # ----------------------------------------------------
+    # 2. NEW STEP: Set up Python
+    # This step configures the runner with the correct Python version.
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12' # Specify a modern Python version
 
-    # 2. NEW STEP: Create the OAuth files from the secrets
+    # 3. NEW STEP: Install Dependencies (Fixes the "No module named 'dotenv'" error)
+    # This step installs all necessary libraries, assuming a requirements.txt file exists.
+    - name: 📦 Install Dependencies
+      run: |
+        # Install the Google GenAI SDK, Requests, python-dotenv, and Google Auth libraries
+        pip install -r requirements.txt
+    # ----------------------------------------------------
+
+    # 4. Create the OAuth files from the secrets
     - name: 📝 Create OAuth Token and Secrets Files
       run: |
         echo "Creating OAuth files from secrets..."
         
         # Create client_secrets.json (used by the script)
+        # Note: '***' in the log means the actual secret value is masked
         echo '${{ secrets.BLOGGER_CLIENT_SECRETS_JSON }}' > client_secrets.json
         
         # Create token.json (contains the refresh token)
@@ -38,7 +53,7 @@ jobs:
         
         echo "OAuth files created successfully."
 
-    # 3. Ensure your main script run command is still correct
-    - name: 🚀 Run Main Blog Bot Script
-      run: |
-        python -m src.main
+    # 5. Execute the Main Python Script
+    - name: 🚀 Run Weather Bot
+      # The python environment is now correctly set up and dependencies are installed
+      run: python -m src.main
