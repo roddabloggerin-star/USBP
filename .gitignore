@@ -33,7 +33,7 @@ build/
 htmlcov/
 
 # The state file used for zone rotation (updated every run)
-last_posted_zone.txt
+
 
 # -------------------------------------------------------------------------
 # Media Files (Optional: If the image is large or changes frequently)
