@@ -99,9 +99,6 @@ def main():
             forecast_data = get_nws_forecast(
                 lat_lon=lat_lon,
                 user_agent=NWS_USER_AGENT,
-                grid_id=city_config.get('grid_id'), # Now uses grid data if available
-                grid_x=city_config.get('grid_x'),
-                grid_y=city_config.get('grid_y')
             )
             
             if forecast_data:
