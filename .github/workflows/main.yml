@@ -1,4 +1,4 @@
-# .github/workflows/main.yml (CLEANED & DEBUGGED)
+# .github/workflows/main.yml (Confirmed Working Structure)
 
 name: 🌦️ Weather Blog Bot Runner
 
@@ -13,10 +13,9 @@ jobs:
     
     env:
       NWS_USER_AGENT: ${{ secrets.NWS_USER_AGENT }}
-      BLOG_ID: ${{ secrets.BLOG_ID }} # Use BLOG_ID in env, as it's used by main.py
-      # CRITICAL FIX: Map the secret name to the environment variable name used in main.py
+      BLOG_ID: ${{ secrets.BLOG_ID }} 
+      # Maps the secret name to the environment variable name used in main.py
       GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_JSON }} 
-      # Note: BLOGGER_API_KEY is not strictly needed if using Service Account for auth
 
     steps:
     - name: ⬇️ Checkout Repository
@@ -30,24 +29,21 @@ jobs:
     - name: 📦 Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        # Assuming your requirements.txt is complete
-        pip install -r requirements.txt
+        pip install -r requirements.txt # Requires a requirements.txt with google-auth, google-genai, requests, etc.
 
-    # --- GOOGLE AUTHENTICATION ---
-    # This step is mainly for gcloud/other GCP services, but also ensures the secrets are handled
     - name: 🔐 Authenticate to Google Cloud (Service Account)
       id: auth
+      # This action automatically sets GOOGLE_APPLICATION_CREDENTIALS, which is good practice.
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.SERVICE_ACCOUNT_JSON }}
         
-    # --- BOT EXECUTION ---
     - name: 🏃 Run NWS Grid Fill Script
-      # This utility script must be run first to ensure config/city_zones.py is up-to-date
+      # Ensures config/city_zones.py has the necessary NWS grid data
       run: |
         python scripts/fill_nws_grid.py
 
     - name: 🚀 Run Main Blog Bot Script (Module Execution)
-      # CRITICAL FIX: Run src/main.py as a module to resolve relative imports.
+      # CRITICAL: Runs src/main.py as a module to resolve relative imports (e.g., from .api_client import...)
       run: |
         python -m src.main

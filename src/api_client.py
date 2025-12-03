@@ -1,10 +1,13 @@
-# src/api_client.py
+# src/api_client.py (CLEANED & FIXED)
 import requests
 import base64
 import json
 from typing import Dict, Any, List
-from google.auth import service_account
+# CRITICAL FIX: service_account lives under google.oauth2
+from google.oauth2 import service_account 
 from google.auth.transport.requests import Request
+from urllib.parse import urlparse
+from time import sleep
 
 # Max post size in bytes (5MB) - used for internal tracking
 MAX_POST_SIZE_BYTES = 5 * 1024 * 1024
@@ -17,7 +20,7 @@ def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
         # Step 1: Get the Grid Endpoint URL
         points_url = f"https://api.weather.gov/points/{lat_lon}"
         headers = {'User-Agent': user_agent, 'Accept': 'application/json'}
-        points_response = requests.get(points_url, headers=headers)
+        points_response = requests.get(points_url, headers=headers, timeout=15)
         points_response.raise_for_status() 
         forecast_url = points_response.json().get('properties', {}).get('forecastHourly')
         
@@ -26,68 +29,78 @@ def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
             return {}
 
         # Step 2: Get the Hourly Forecast Data
-        forecast_response = requests.get(forecast_url, headers=headers)
+        forecast_response = requests.get(forecast_url, headers=headers, timeout=15)
         forecast_response.raise_for_status()
         
         return forecast_response.json().get('properties', {})
-    
+        
+    except requests.exceptions.HTTPError as e:
+        print(f"NWS API HTTP Error: {e.response.status_code} for {lat_lon}. Details: {e.response.text}")
+        return {}
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching NWS data for {lat_lon}: {e}")
+        print(f"NWS API Request Error for {lat_lon}: {e}")
         return {}
 
 
-def image_to_base64(image_url: str, user_agent: str) -> str:
+def image_to_base64(image_url: str, user_agent: str) -> str | None:
     """
-    Downloads an image from a URL and converts it to a Base64 string (data URI),
-    checking for size constraints.
+    Downloads an image from a URL, encodes it as base64, and returns the string.
     """
+    if not urlparse(image_url).scheme in ('http', 'https'):
+        print(f"Invalid URL scheme: {image_url}")
+        return None
+        
     try:
-        # Set a hard limit on individual images to ensure overall post size is manageable
-        MAX_IMAGE_SIZE_KB = 500 
-        MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_KB * 1024
-        
         headers = {'User-Agent': user_agent}
-        image_response = requests.get(image_url, headers=headers, stream=True, timeout=10)
-        image_response.raise_for_status()
+        # Use a timeout for the image download
+        response = requests.get(image_url, headers=headers, stream=True, timeout=30) 
+        response.raise_for_status()
         
-        image_content = image_response.content
-        
-        if len(image_content) > MAX_IMAGE_SIZE_BYTES: 
-            print(f"Warning: Image at {image_url} is too large ({len(image_content)/1024:.2f}KB > {MAX_IMAGE_SIZE_KB}KB). Skipping.")
-            return ""
-
-        content_type = image_response.headers.get('Content-Type', 'image/png')
-        encoded_image = base64.b64encode(image_content).decode('utf-8')
-        
-        return f"data:{content_type};base64,{encoded_image}"
+        # Read the image data and encode it
+        image_data = response.content
+        return base64.b64encode(image_data).decode('utf-8')
 
     except requests.exceptions.RequestException as e:
-        print(f"Error downloading or converting image from {image_url}: {e}")
-        return ""
+        print(f"Error fetching image from {image_url}: {e}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred during image processing: {e}")
+        return None
 
 
-def get_blogger_credentials(keyfile_path: str) -> str:
+def get_blogger_credentials(service_account_key_path: str) -> str | None:
     """
-    Generates a valid OAuth 2.0 access token using a Google Service Account key file.
+    Authenticates with Google Blogger using a Service Account Key file.
+    Returns the access token if successful.
     """
-    SCOPES = ['https://www.googleapis.com/auth/blogger']
-    
     try:
+        # Define the scope required for Blogger API (Read/Write)
+        SCOPES = ["https://www.googleapis.com/auth/blogger"]
+        
+        # Load the credentials from the key file
         credentials = service_account.Credentials.from_service_account_file(
-            keyfile_path,
+            service_account_key_path,
             scopes=SCOPES
         )
+        
+        # Refresh the credentials to get an access token
         credentials.refresh(Request())
+        
         return credentials.token
-    
+
     except Exception as e:
-        print(f"Error generating Blogger credentials. Ensure keyfile path is correct and JSON is valid: {e}")
-        return ""
+        print(f"Authentication Error: {e}")
+        return None
 
 
-def post_to_blogger(blog_id: str, title: str, content_html: str, service_account_key_path: str) -> bool:
+def post_to_blogger(
+    blog_id: str,
+    title: str,
+    content_html: str,
+    service_account_key_path: str
+) -> bool:
     """
-    Publishes a new post to Blogger using the V3 API with Service Account authentication.
+    Posts content to the specified Blogger blog.
     """
     access_token = get_blogger_credentials(service_account_key_path)
     if not access_token:
@@ -111,12 +124,12 @@ def post_to_blogger(blog_id: str, title: str, content_html: str, service_account
     }
     
     try:
+        # Wait a moment to respect API rate limits
+        sleep(1) 
         response = requests.post(post_url, headers=headers, json=post_data)
         response.raise_for_status()
         
-        # Check if the response contains the meta description (which it should if the model outputs it)
-        # response_data = response.json()
-        # print(f"Post URL: {response_data.get('url')}") 
+        print("Post successful.")
         return True
     
     except requests.exceptions.RequestException as e:
@@ -124,7 +137,7 @@ def post_to_blogger(blog_id: str, title: str, content_html: str, service_account
         if 'response' in locals():
             try:
                 error_details = response.json()
-                print(f"Blogger API Error: {error_details.get('error', {}).get('message', 'No message')}")
+                print(f"Blogger Error Details: {error_details}")
             except json.JSONDecodeError:
-                 print(f"Response Content: {response.text}")
+                print(f"Blogger Error Response Text: {response.text}")
         return False
