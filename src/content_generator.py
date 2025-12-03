@@ -1,4 +1,4 @@
-# src/content_generator.py (FIXED: Gemini Client Initialization)
+# src/content_generator.py
 from google import genai
 from google.genai import types
 from typing import Dict, Any, List
@@ -7,9 +7,29 @@ import json
 # Define the Gemini model we are using
 MODEL_NAME = "gemini-2.5-flash"
 
-# CRITICAL FIX: Initialize the Gemini client here.
-# It will automatically pick up the GEMINI_API_KEY from the environment.
+# Initialize the Gemini client here.
 client = genai.Client()
+
+# --- NEW: Define the JSON Schema for the expected output ---
+BLOG_POST_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "title": types.Schema(
+            type=types.Type.STRING,
+            description="A strong, SEO-optimized blog post title (max 70 characters)."
+        ),
+        "meta_description": types.Schema(
+            type=types.Type.STRING,
+            description="A concise summary of the content for search engines (max 160 characters)."
+        ),
+        "content_html": types.Schema(
+            type=types.Type.STRING,
+            description="The full blog post content in HTML format, guaranteed to be over 1000 words. Must contain H1, H2, P, and the embedded image tag/disclaimer."
+        ),
+    },
+    required=["title", "meta_description", "content_html"]
+)
+# --- END NEW SCHEMA ---
 
 # Define system instruction for the AI model to ensure quality and compliance
 SYSTEM_INSTRUCTION = (
@@ -22,7 +42,7 @@ SYSTEM_INSTRUCTION = (
     "3. DO NOT use any phrases that mention AI generation, 'AI-generated', 'written by AI', 'bot', 'large language model', etc. The post must appear as if written by a human expert."
     "4. Focus on compounding value by providing rich, educational context around the weather."
     "5. Use US English and tailor the tone for a US audience."
-    "6. Structure the output as a valid JSON object containing exactly 'title', 'meta_description', and 'content_html'."
+    # Rule 6 is now enforced by the response_schema.
 )
 
 def format_forecast_for_gemini(city_data: Dict[str, Any], city_forecasts: Dict[str, Any]) -> str:
@@ -30,7 +50,6 @@ def format_forecast_for_gemini(city_data: Dict[str, Any], city_forecasts: Dict[s
     Formats the aggregated city data and forecast data into a single string
     for inclusion in the Gemini API prompt.
     """
-    # ... (function content omitted for brevity, no changes needed)
     output = []
     
     # 1. Zone Information
@@ -73,7 +92,7 @@ def generate_blog_content(
     disclaimer_html: str,
 ) -> Dict[str, str] | None:
     """
-    Calls the Gemini API to generate the blog post content.
+    Calls the Gemini API to generate the blog post content, guaranteeing JSON output via schema.
     """
     
     formatted_data = format_forecast_for_gemini(city_data, city_forecasts)
@@ -82,39 +101,40 @@ def generate_blog_content(
     
     prompt_instruction = (
         f"**TOPIC:** Generate an over 1000-word weather blog post for the **{zone_name}** zone. "
-        f"The content must be rich, detailed, and based solely on the data provided below. "
-        "The post MUST contain: "
-        "1. `title`: A strong, SEO-optimized title (max 70 characters)."
-        "2. `meta_description`: A concise summary for search engines (max 160 characters)."
-        "3. `content_html`: The full, over 1000-word HTML body. Embed the image tag and the required legal disclaimer."
+        "The content must be rich, detailed, and based solely on the data provided below. "
+        "The final output JSON object MUST contain 'title', 'meta_description', and 'content_html'. "
     )
     
     # Combine prompts
     full_prompt = (
         prompt_instruction + "\n\n" + 
         full_data_prompt + "\n\n" +
-        f"**IMPORTANT INSTRUCTIONS:**\n"
+        f"**IMPORTANT INSTRUCTIONS for content_html:**\n"
         f"1. Embed the image tag: `{image_tag}` near the beginning of the `content_html` body (e.g., after the first paragraph or H1)."
         f"2. Append the disclaimer HTML: `{disclaimer_html}` to the very end of the `content_html` body."
         f"3. Ensure the final `content_html` results in a total size that is safe for Blogger (well under 5MB)."
-        f"4. The entire output MUST be a valid JSON object."
     )
 
     try:
-        # Client is now globally available/initialized at the module level
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=[full_prompt],
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
+                # CRITICAL FIX: Use response_schema to guarantee valid JSON output
                 response_mime_type="application/json",
-                temperature=0.7 # Add a little creativity for rich content
+                response_schema=BLOG_POST_SCHEMA, 
+                temperature=0.7 
             )
         )
         
-        # The response text should be a JSON string
+        # The response.text is now guaranteed to be valid JSON
         return json.loads(response.text)
 
+    except json.JSONDecodeError as e:
+        print(f"FATAL: The model returned invalid JSON despite schema enforcement.")
+        print(f"Error details: {e}")
+        return None
     except Exception as e:
         print(f"An error occurred during content generation: {e}")
         return None
