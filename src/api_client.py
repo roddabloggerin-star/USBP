@@ -117,7 +117,7 @@ def post_to_blogger(
         "title": title,
         "content": content_html,
         "labels": ["Weather Forecast", "USA", "NationalWeatherService"], 
-        "isDraft": False # Set to True for testing, False for live publishing
+        "isDraft": True # Set to True for testing, False for live publishing
     }
     
     try:
