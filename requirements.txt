@@ -1,6 +1,5 @@
-# requirements.txt
-python-dotenv
-requests
 google-genai
+requests
+python-dotenv
+google-auth
 google-auth-oauthlib
-google-auth-httplib2
