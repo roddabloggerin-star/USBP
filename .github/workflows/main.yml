@@ -1,21 +1,27 @@
-# .github/workflows/main.yml (Confirmed Working Structure)
-
+# .github/workflows/main.yml
 name: 🌦️ Weather Blog Bot Runner
 
 on:
+  # Schedule: Runs the bot daily at 00:00 UTC (Adjust the cron schedule as needed)
   schedule:
     - cron: '0 0 * * *' 
+  
+  # Manual Trigger: Allows you to manually run the workflow from GitHub's Actions tab
   workflow_dispatch:
 
 jobs:
   run_weather_bot:
+    # Use the latest stable Ubuntu runner environment
     runs-on: ubuntu-latest
     
+    # Define environment variables to be used throughout the job
     env:
       NWS_USER_AGENT: ${{ secrets.NWS_USER_AGENT }}
       BLOG_ID: ${{ secrets.BLOG_ID }} 
       # Maps the secret name to the environment variable name used in main.py
       GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_JSON }} 
+      # GEMINI_API_KEY is automatically picked up by the SDK if set this way
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
     steps:
     - name: ⬇️ Checkout Repository
@@ -24,26 +30,24 @@ jobs:
     - name: 🐍 Set up Python
       uses: actions/setup-python@v5
       with:
+        # Define the Python version you want to use
         python-version: '3.10'
 
     - name: 📦 Install Dependencies
+      # Assuming you have a requirements.txt file listing 'google-auth', 'google-genai', 'requests', 'python-dotenv', etc.
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt # Requires a requirements.txt with google-auth, google-genai, requests, etc.
-
-    - name: 🔐 Authenticate to Google Cloud (Service Account)
-      id: auth
-      # This action automatically sets GOOGLE_APPLICATION_CREDENTIALS, which is good practice.
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+        pip install -r requirements.txt 
+        
+    # REMOVED: The step to authenticate via 'google-github-actions/auth@v2'
+    # The key is now passed directly as an environment variable (GOOGLE_SERVICE_ACCOUNT_KEY)
+    # and processed manually by main.py, making the standard auth action redundant.
         
     - name: 🏃 Run NWS Grid Fill Script
-      # Ensures config/city_zones.py has the necessary NWS grid data
+      # Ensures the config file is up-to-date with NWS grid info before the main script runs.
       run: |
         python scripts/fill_nws_grid.py
 
-    - name: 🚀 Run Main Blog Bot Script (Module Execution)
-      # CRITICAL: Runs src/main.py as a module to resolve relative imports (e.g., from .api_client import...)
+    - name: 🚀 Run Main Blog Bot Script
       run: |
         python -m src.main

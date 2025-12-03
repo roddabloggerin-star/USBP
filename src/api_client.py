@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 # CRITICAL FIX: service_account lives under google.oauth2
 from google.oauth2 import service_account 
 from google.auth.transport.requests import Request
-from urllib.parse import urlparse
+# REMOVED: from urllib.parse import urlparse 
 from time import sleep
 
 # Max post size in bytes (5MB) - used for internal tracking
@@ -16,12 +16,18 @@ def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
     """
     Fetches the detailed weather forecast for a given lat/lon pair from the NWS API.
     """
+    # A generous timeout is used to accommodate slower NWS responses
+    TIMEOUT_SECONDS = 30 
+    
     try:
         # Step 1: Get the Grid Endpoint URL
         points_url = f"https://api.weather.gov/points/{lat_lon}"
+        # Using 'application/json' or 'application/geo+json' is appropriate here
         headers = {'User-Agent': user_agent, 'Accept': 'application/json'}
-        points_response = requests.get(points_url, headers=headers, timeout=15)
+        points_response = requests.get(points_url, headers=headers, timeout=TIMEOUT_SECONDS)
         points_response.raise_for_status() 
+        
+        # The 'forecastHourly' link is typically in the properties
         forecast_url = points_response.json().get('properties', {}).get('forecastHourly')
         
         if not forecast_url:
@@ -29,69 +35,60 @@ def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
             return {}
 
         # Step 2: Get the Hourly Forecast Data
-        forecast_response = requests.get(forecast_url, headers=headers, timeout=15)
+        # Re-use the same user_agent and headers
+        forecast_response = requests.get(forecast_url, headers=headers, timeout=TIMEOUT_SECONDS)
         forecast_response.raise_for_status()
         
         return forecast_response.json().get('properties', {})
-        
+
     except requests.exceptions.HTTPError as e:
-        print(f"NWS API HTTP Error: {e.response.status_code} for {lat_lon}. Details: {e.response.text}")
+        print(f"HTTP Error fetching NWS forecast for {lat_lon}: {e}")
         return {}
     except requests.exceptions.RequestException as e:
-        print(f"NWS API Request Error for {lat_lon}: {e}")
+        print(f"Request Error fetching NWS forecast for {lat_lon}: {e}")
         return {}
 
-
-def image_to_base64(image_url: str, user_agent: str) -> str | None:
-    """
-    Downloads an image from a URL, encodes it as base64, and returns the string.
-    """
-    if not urlparse(image_url).scheme in ('http', 'https'):
-        print(f"Invalid URL scheme: {image_url}")
-        return None
-        
+def image_to_base64(image_path: str) -> str | None:
+    """Reads a local image and converts it to a Base64 string."""
     try:
-        headers = {'User-Agent': user_agent}
-        # Use a timeout for the image download
-        response = requests.get(image_url, headers=headers, stream=True, timeout=30) 
-        response.raise_for_status()
-        
-        # Read the image data and encode it
-        image_data = response.content
-        return base64.b64encode(image_data).decode('utf-8')
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching image from {image_url}: {e}")
+        with open(image_path, "rb") as image_file:
+            # Encode the file content
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            return encoded_string
+    except FileNotFoundError:
+        print(f"Error: Image file not found at {image_path}")
         return None
-    except Exception as e:
-        print(f"An unexpected error occurred during image processing: {e}")
+    except IOError as e:
+        print(f"Error reading image file: {e}")
         return None
 
+# --- Blogger API Integration ---
+# Required scopes for posting to a Blogger blog
+BLOGGER_SCOPES = ["https://www.googleapis.com/auth/blogger"]
 
 def get_blogger_credentials(service_account_key_path: str) -> str | None:
     """
-    Authenticates with Google Blogger using a Service Account Key file.
-    Returns the access token if successful.
+    Authenticates using the service account and returns an access token.
     """
     try:
-        # Define the scope required for Blogger API (Read/Write)
-        SCOPES = ["https://www.googleapis.com/auth/blogger"]
-        
-        # Load the credentials from the key file
+        # Load the credentials from the service account key file
         credentials = service_account.Credentials.from_service_account_file(
             service_account_key_path,
-            scopes=SCOPES
+            scopes=BLOGGER_SCOPES
         )
         
-        # Refresh the credentials to get an access token
+        # Refresh the credentials to obtain a new access token
         credentials.refresh(Request())
         
-        return credentials.token
-
-    except Exception as e:
-        print(f"Authentication Error: {e}")
+        if credentials.token:
+            return credentials.token
+        
+        print("Error: Credentials refresh failed to produce a token.")
         return None
 
+    except Exception as e:
+        print(f"Error during Blogger service account authentication: {e}")
+        return None
 
 def post_to_blogger(
     blog_id: str,
@@ -137,7 +134,7 @@ def post_to_blogger(
         if 'response' in locals():
             try:
                 error_details = response.json()
-                print(f"Blogger Error Details: {error_details}")
-            except json.JSONDecodeError:
-                print(f"Blogger Error Response Text: {response.text}")
+                print(f"Blogger API Error Details: {error_details.get('error', {}).get('message')}")
+            except:
+                print("Could not parse error response from Blogger API.")
         return False
