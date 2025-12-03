@@ -1,27 +1,22 @@
-# .github/workflows/main.yml
+# .github/workflows/main.yml (CLEANED & DEBUGGED)
 
 name: 🌦️ Weather Blog Bot Runner
 
 on:
-  # Schedule: Runs the bot daily at 00:00 UTC (Adjust the cron schedule as needed)
   schedule:
     - cron: '0 0 * * *' 
-  
-  # Manual Trigger: Allows you to manually run the workflow from GitHub's Actions tab
   workflow_dispatch:
 
 jobs:
   run_weather_bot:
-    # Use the latest stable Ubuntu runner environment
     runs-on: ubuntu-latest
     
-    # Define environment variables to be used throughout the job
     env:
-      # NWS_USER_AGENT is stored in your project's .env file, but should also be set as a GitHub Secret if needed for the workflow itself
       NWS_USER_AGENT: ${{ secrets.NWS_USER_AGENT }}
-      
-      # BLOGGER_API_KEY is the plain string API key for simple Blogger calls
-      BLOGGER_API_KEY: ${{ secrets.BLOGGER_API_KEY }}
+      BLOG_ID: ${{ secrets.BLOG_ID }} # Use BLOG_ID in env, as it's used by main.py
+      # CRITICAL FIX: Map the secret name to the environment variable name used in main.py
+      GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_JSON }} 
+      # Note: BLOGGER_API_KEY is not strictly needed if using Service Account for auth
 
     steps:
     - name: ⬇️ Checkout Repository
@@ -30,39 +25,29 @@ jobs:
     - name: 🐍 Set up Python
       uses: actions/setup-python@v5
       with:
-        # Define the Python version you want to use
         python-version: '3.10'
 
     - name: 📦 Install Dependencies
-      # Assuming you have a requirements.txt file listing 'requests', 'python-dotenv', etc.
       run: |
         python -m pip install --upgrade pip
+        # Assuming your requirements.txt is complete
         pip install -r requirements.txt
 
-    # --- SERVICE ACCOUNT AUTHENTICATION (for Google Cloud access) ---
-    # This step authenticates the GitHub runner using the Service Account JSON secret.
+    # --- GOOGLE AUTHENTICATION ---
+    # This step is mainly for gcloud/other GCP services, but also ensures the secrets are handled
     - name: 🔐 Authenticate to Google Cloud (Service Account)
       id: auth
       uses: google-github-actions/auth@v2
       with:
-        # Use the secret containing your service account JSON key
         credentials_json: ${{ secrets.SERVICE_ACCOUNT_JSON }}
         
-    # Optional: If your bot uses Google Cloud Storage or other Google services, 
-    # you can uncomment this step to set your default project ID
-    # - name: ☁️ Set Google Cloud Project
-    #   uses: google-github-actions/setup-gcloud@v2
-    #   with:
-    #     project_id: your-gcp-project-id 
-
     # --- BOT EXECUTION ---
     - name: 🏃 Run NWS Grid Fill Script
-      # This script uses the NWS_USER_AGENT from the environment
+      # This utility script must be run first to ensure config/city_zones.py is up-to-date
       run: |
         python scripts/fill_nws_grid.py
 
-    - name: 🚀 Run Main Blog Bot Script (or your next main script)
-      # Your main bot script will use the environment variables BLOGGER_API_KEY and NWS_USER_AGENT
-      # It will also be authenticated to Google Cloud thanks to the 'auth' step above.
+    - name: 🚀 Run Main Blog Bot Script (Module Execution)
+      # CRITICAL FIX: Run src/main.py as a module to resolve relative imports.
       run: |
-        python scripts/main_bot_script.py # Replace with your primary script name
+        python -m src.main
