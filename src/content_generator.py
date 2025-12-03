@@ -7,10 +7,14 @@ import json
 # Define the Gemini model we are using
 MODEL_NAME = "gemini-2.5-flash"
 
+# --- CRITICAL FIX: Add the Timeout Constant to prevent hanging ---
+API_TIMEOUT_SECONDS = 120 # Set a 2-minute (120 seconds) timeout for content generation
+# --- END CRITICAL FIX ---
+
 # Initialize the Gemini client here.
 client = genai.Client()
 
-# --- NEW: Define the JSON Schema for the expected output ---
+# --- Define the JSON Schema for the expected output ---
 BLOG_POST_SCHEMA = types.Schema(
     type=types.Type.OBJECT,
     properties={
@@ -37,18 +41,20 @@ SYSTEM_INSTRUCTION = (
     "for the USA market. Your goal is to write detailed, engaging, and high-value "
     "weather forecast articles based on the provided data. "
     "CRITICAL RULES: "
-    "1. The final content MUST be over 1000 words. Expand thoughtfully on topics like climate history, agricultural impact, travel advisories, and preparation tips."
+    "1. The final content MUST be over 700 words. Expand thoughtfully on topics like climate history, agricultural impact, travel advisories, and preparation tips."
     "2. Format the content using clean HTML tags (<h1>, <h2>, <p>, <ul>, <strong>, <em>, <a>, <img>)."
     "3. DO NOT use any phrases that mention AI generation, 'AI-generated', 'written by AI', 'bot', 'large language model', etc. The post must appear as if written by a human expert."
     "4. Focus on compounding value by providing rich, educational context around the weather."
     "5. Use US English and tailor the tone for a US audience."
-    # Rule 6 is now enforced by the response_schema.
+    "6. **CRITICAL JSON RULE:** Ensure all string fields, especially 'content_html', are perfectly valid JSON by escaping all internal double quotes (use \\\" for quotes within the HTML string) and avoiding raw newlines."
 )
 
 def format_forecast_for_gemini(city_data: Dict[str, Any], city_forecasts: Dict[str, Any]) -> str:
     """
-    Formats the aggregated city data and forecast data into a single string
-    for inclusion in the Gemini API prompt.
+    Formats the aggregated city data, including current conditions and alerts,
+    into a single string for inclusion in the Gemini API prompt.
+    
+    NOTE: This function filters the hourly forecast data to the NEXT 24 PERIODS.
     """
     output = []
     
@@ -56,30 +62,62 @@ def format_forecast_for_gemini(city_data: Dict[str, Any], city_forecasts: Dict[s
     output.append(f"--- WEATHER ZONE: {city_data['id'].upper()} ---")
     output.append(f"Primary City: {city_data['cities'][0]['city']}")
     
-    # 2. Aggregated Forecasts
-    output.append("\n--- AGGREGATED HOURLY FORECAST DATA (6-day window) ---\n")
-    for city, forecast in city_forecasts.items():
-        if not forecast:
-            output.append(f"WARNING: Forecast data unavailable for {city}.")
-            continue
-            
-        # The forecast is already structured as a dictionary of periods
-        output.append(f"City: {city}")
-        output.append("Forecast Periods:")
+    # 2. Aggregated Weather Data (Current, Alerts, 24-Hour Forecast)
+    output.append("\n--- AGGREGATED CITY WEATHER DATA ---\n")
+    for city, data in city_forecasts.items():
+        output.append(f"\n--- CITY: {city} ---\n")
         
-        # Iterate over the first 5 days/periods to keep the prompt size manageable
-        for i, period in enumerate(forecast.get('periods', [])[:120]): # Cap to 5 days * 24 periods = 120
+        # --- ALERTS (Point 2 of request) ---
+        alerts = data.get('alerts', [])
+        if alerts:
+            output.append(f"*** ACTIVE WEATHER ALERTS ({len(alerts)}) - CRITICAL: ***")
+            for alert in alerts:
+                props = alert.get('properties', {})
+                headline = props.get('headline', 'No Headline')
+                severity = props.get('severity', 'Unknown')
+                event = props.get('event', 'Unknown Event')
+                # Include the full text description as well
+                description = props.get('description', '').replace('\n', ' ').strip()
+                output.append(f"  - ALERT: {event} | Severity: {severity} | Headline: {headline} | Description: {description}")
+        else:
+            output.append("No active weather alerts for this city.")
             
-            # Simple, key details for the AI to interpret
-            start_time = period.get('startTime')
-            temperature = period.get('temperature')
-            wind_speed = period.get('windSpeed')
-            relative_humidity = period.get('relativeHumidity', {}).get('value')
-            short_forecast = period.get('shortForecast')
+        # --- CURRENT CONDITIONS (Point 1 of request) ---
+        current = data.get('current_conditions', {})
+        if current:
+            temp_f = current.get('temperature', {}).get('value') # NWS returns Celsius for temperature, we will instruct AI to convert
+            text_desc = current.get('textDescription')
+            wind_speed = current.get('windSpeed', {}).get('value')
             
-            output.append(
-                f"  - {start_time}: Temp={temperature}°F, Wind={wind_speed}, Humidity={relative_humidity}%, Forecast='{short_forecast}'"
-            )
+            # Convert NWS Celsius to Fahrenheit for easier blog integration (optional but helpful)
+            if temp_f is not None:
+                 # Standard NWS observation temperature is in Celsius. AI will use this in prompt
+                output.append("\nCURRENT CONDITIONS (NWS C/metric):")
+                output.append(f"  - Temperature: {temp_f}°C") 
+            
+            output.append(f"  - Description: {text_desc}")
+            output.append(f"  - Wind Speed: {wind_speed} knots") 
+        else:
+             output.append("Current condition data unavailable.")
+        
+        # --- 24-HOUR HOURLY FORECAST (Point 3 of request) ---
+        forecast = data.get('forecast_hourly', {})
+        if forecast:
+            output.append("\nNEXT 24 HOURS HOURLY FORECAST:")
+            # CRITICAL: Filter periods to the first 24 only
+            periods = forecast.get('periods', [])[:24] 
+            
+            for period in periods:
+                start_time = period.get('startTime')
+                temperature = period.get('temperature') # This is usually Fahrenheit for hourly forecast
+                wind_speed = period.get('windSpeed')
+                short_forecast = period.get('shortForecast')
+                
+                output.append(
+                    f"  - {start_time}: Temp={temperature}°F, Wind={wind_speed}, Forecast='{short_forecast}'"
+                )
+        else:
+            output.append("Hourly forecast data unavailable.")
             
     return "\n".join(output)
 
@@ -119,9 +157,10 @@ def generate_blog_content(
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=[full_prompt],
+            # CRITICAL FIX: Timeout parameter moved here, outside of config
+            # timeout=API_TIMEOUT_SECONDS, 
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
-                # CRITICAL FIX: Use response_schema to guarantee valid JSON output
                 response_mime_type="application/json",
                 response_schema=BLOG_POST_SCHEMA, 
                 temperature=0.7 
@@ -136,5 +175,6 @@ def generate_blog_content(
         print(f"Error details: {e}")
         return None
     except Exception as e:
+        # This will catch the Timeout error if the request takes longer than 120s
         print(f"An error occurred during content generation: {e}")
         return None

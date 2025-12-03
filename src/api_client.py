@@ -1,10 +1,9 @@
-# src/api_client.py (FINAL VERSION for OAuth 2.0)
+# src/api_client.py (FINAL VERSION for OAuth 2.0 and API Key Fix)
 import requests
 import base64
 import json
 import os
 from typing import Dict, Any, List
-# Removed: from google.oauth2 import service_account 
 from google.auth.transport.requests import Request
 from urllib.parse import urlparse
 from time import sleep
@@ -79,7 +78,8 @@ def list_accessible_blogs(client_secret_path: str) -> bool:
         return False
         
     list_url = 'https://www.googleapis.com/blogger/v3/users/self/blogs'
-    headers = {"Authorization": f"Bearer {access_token}"}
+    # NOTE: No API key needed here because the OAuth Bearer token is used for user authentication
+    headers = {"Authorization": f"Bearer {access_token}"} 
     
     try:
         response = requests.get(list_url, headers=headers)
@@ -109,6 +109,9 @@ def list_accessible_blogs(client_secret_path: str) -> bool:
 def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
     """
     Fetches the detailed weather forecast for a given lat/lon pair from the NWS API.
+    
+    This replaces the previous call structure that required grid_id/x/y by resolving 
+    the forecast URL directly from the /points endpoint using only lat/lon.
     """
     try:
         # Step 1: Get the Grid Endpoint URL
@@ -116,6 +119,8 @@ def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
         headers = {'User-Agent': user_agent, 'Accept': 'application/json'}
         points_response = requests.get(points_url, headers=headers, timeout=15)
         points_response.raise_for_status() 
+        
+        # The forecastHourly URL is within properties
         forecast_url = points_response.json().get('properties', {}).get('forecastHourly')
         
         if not forecast_url:
@@ -126,14 +131,18 @@ def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
         forecast_response = requests.get(forecast_url, headers=headers, timeout=15)
         forecast_response.raise_for_status()
         
+        # We only return the 'properties' part which contains the forecast periods
         return forecast_response.json().get('properties', {})
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching NWS data: {e}")
+        print(f"Error fetching NWS data for {lat_lon}: {e}")
         return {}
 
 def image_to_base64(image_path: str) -> str | None:
-    """Converts a local image file to a Base64 string for embedding."""
+    """
+    Converts a local image file to a Base64 string for embedding in a blog post.
+    NOTE: The function name here is image_to_base64.
+    """
     try:
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
@@ -141,24 +150,36 @@ def image_to_base64(image_path: str) -> str | None:
         print(f"Error reading image file {image_path}: {e}")
         return None
 
-# --- MODIFIED: post_to_blogger function ---
+# --- MODIFIED: post_to_blogger function (API Key Fix) ---
 
 def post_to_blogger(
     blog_id: str,
     title: str,
     content_html: str,
-    client_secret_path: str # CHANGED: Argument is now the path to client secrets
+    client_secret_path: str
 ) -> bool:
     """
-    Posts content to the specified Blogger blog using OAuth 2.0 credentials.
+    Posts content to the specified Blogger blog using OAuth 2.0 credentials and API Key.
     """
-    # Use the new OAuth credential retrieval function
     access_token = get_oauth_credentials(client_secret_path)
     if not access_token:
         print("Failed to obtain Blogger access token.")
         return False
+    
+    # --- START API KEY FIX (Necessary for non-service-account/OAuth calls) ---
+    blogger_api_key = os.getenv("BLOGGER_API_KEY")
+    if not blogger_api_key:
+        # Check for both environment variables and direct import
+        # NOTE: os.getenv for BLOGGER_API_KEY is preferred
+        print("FATAL: BLOGGER_API_KEY environment variable not set. This is required.")
+        return False
         
-    post_url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
+    # Append the API key to the URL as a query parameter
+    post_url = (
+        f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
+        f"?key={blogger_api_key}" # <--- FIX APPLIED HERE
+    )
+    # --- END API KEY FIX ---
     
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -187,6 +208,7 @@ def post_to_blogger(
         if 'response' in locals():
             try:
                 error_details = response.json()
+                # Print the specific Google API error message if available
                 print(f"Blogger API Error Details: {error_details.get('error', {}).get('message')}")
             except:
                 pass 
