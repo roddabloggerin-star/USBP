@@ -159,57 +159,44 @@ def post_to_blogger(
     client_secret_path: str
 ) -> bool:
     """
-    Posts content to the specified Blogger blog using OAuth 2.0 credentials and API Key.
+    Posts content to the specified Blogger blog using OAuth 2.0 credentials.
+    No API key required when using a user access token.
     """
     access_token = get_oauth_credentials(client_secret_path)
     if not access_token:
         print("Failed to obtain Blogger access token.")
         return False
-    
-    # --- START API KEY FIX (Necessary for non-service-account/OAuth calls) ---
-    blogger_api_key = os.getenv("BLOGGER_API_KEY")
-    if not blogger_api_key:
-        # Check for both environment variables and direct import
-        # NOTE: os.getenv for BLOGGER_API_KEY is preferred
-        print("FATAL: BLOGGER_API_KEY environment variable not set. This is required.")
-        return False
-        
-    # Append the API key to the URL as a query parameter
-    post_url = (
-        f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
-        f"?key={blogger_api_key}" # <--- FIX APPLIED HERE
-    )
-    # --- END API KEY FIX ---
-    
+
+    # Pure OAuth endpoint: no ?key=... needed
+    post_url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
+
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
-    
+
     post_data = {
         "kind": "blogger#post",
         "blog": {"id": blog_id},
         "title": title,
         "content": content_html,
-        "labels": ["Weather Forecast", "USA", "NationalWeatherService"], 
-        "isDraft": False 
+        "labels": ["Weather Forecast", "USA", "NationalWeatherService"],
     }
-    
+
     try:
-        sleep(1) 
+        sleep(1)  # avoid hammering the API
         response = requests.post(post_url, headers=headers, json=post_data)
         response.raise_for_status()
-        
         print("Post successful.")
         return True
-    
+
     except requests.exceptions.RequestException as e:
         print(f"Error posting to Blogger: {e}")
         if 'response' in locals():
             try:
                 error_details = response.json()
-                # Print the specific Google API error message if available
-                print(f"Blogger API Error Details: {error_details.get('error', {}).get('message')}")
-            except:
-                pass 
+                # Log full error for debugging, not just message
+                print("Full Blogger API error:", json.dumps(error_details, indent=2))
+            except Exception:
+                pass
         return False

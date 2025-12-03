@@ -41,7 +41,7 @@ SYSTEM_INSTRUCTION = (
     "for the USA market. Your goal is to write detailed, engaging, and high-value "
     "weather forecast articles based on the provided data. "
     "CRITICAL RULES: "
-    "1. The final content MUST be over 700 words. Expand thoughtfully on topics like climate history, agricultural impact, travel advisories, and preparation tips."
+    "1. The final content MUST be over 100 words. Expand thoughtfully on topics like climate history, agricultural impact, travel advisories, and preparation tips."
     "2. Format the content using clean HTML tags (<h1>, <h2>, <p>, <ul>, <strong>, <em>, <a>, <img>)."
     "3. DO NOT use any phrases that mention AI generation, 'AI-generated', 'written by AI', 'bot', 'large language model', etc. The post must appear as if written by a human expert."
     "4. Focus on compounding value by providing rich, educational context around the weather."
