@@ -1,4 +1,7 @@
-google-genai
+# requirements.txt
 requests
 python-dotenv
+google-genai
 google-auth
+google-auth-oauthlib  # CRITICAL: New for OAuth 2.0 flow
+# google-api-python-client (Often useful, keep if present)

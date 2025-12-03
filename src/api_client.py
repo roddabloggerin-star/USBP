@@ -1,33 +1,121 @@
-# src/api_client.py (CLEANED & FIXED)
+# src/api_client.py (FINAL VERSION for OAuth 2.0)
 import requests
 import base64
 import json
+import os
 from typing import Dict, Any, List
-# CRITICAL FIX: service_account lives under google.oauth2
-from google.oauth2 import service_account 
+# Removed: from google.oauth2 import service_account 
 from google.auth.transport.requests import Request
-# REMOVED: from urllib.parse import urlparse 
+from urllib.parse import urlparse
 from time import sleep
 
-# Max post size in bytes (5MB) - used for internal tracking
+# --- NEW OAUTH IMPORTS ---
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+# --- END NEW OAUTH IMPORTS ---
+
+# Max post size in bytes (5MB)
 MAX_POST_SIZE_BYTES = 5 * 1024 * 1024
+
+# Blogger API Scopes (Full read/write access is required for publishing)
+BLOGGER_SCOPES = ['https://www.googleapis.com/auth/blogger']
+# File where the authorized access/refresh token is stored (in the project root)
+TOKEN_FILE = 'token.json' 
+
+# --- OAuth 2.0 Credential Functions ---
+
+def get_oauth_credentials(client_secret_path: str) -> str | None:
+    """
+    Handles the OAuth 2.0 flow: loads existing token, refreshes it, or starts a new interactive user authorization.
+    Returns the raw access token string.
+    """
+    creds = None
+    
+    # 1. Try to load the token from token.json
+    if os.path.exists(TOKEN_FILE):
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, BLOGGER_SCOPES)
+        except Exception as e:
+             print(f"Error loading credentials from {TOKEN_FILE}: {e}. Will attempt re-authorization.")
+    
+    # 2. Check if credentials are valid/refreshable
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            # Refresh the token non-interactively if possible
+            print("Refreshing expired OAuth token...")
+            creds.refresh(Request())
+        else:
+            # 3. Start the interactive authorization flow (ONLY RUNS LOCALLY THE FIRST TIME)
+            print(f"\n--- Starting OAuth 2.0 Authorization Flow ---")
+            print(f"Please follow the link in your browser to grant permission.")
+            
+            # This line will launch the local web server and open the browser
+            flow = InstalledAppFlow.from_client_secrets_file(
+                client_secret_path, BLOGGER_SCOPES)
+            
+            # port=0 allows the OS to pick a free port for the local web server
+            creds = flow.run_local_server(port=0) 
+            
+            print("Authorization successful.")
+            
+        # 4. Save the new or refreshed credentials
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
+        print(f"Credentials saved/updated in {TOKEN_FILE}.")
+
+    if creds and creds.token:
+        return creds.token
+    
+    return None
+
+def list_accessible_blogs(client_secret_path: str) -> bool:
+    """
+    Tests the connection by listing accessible blogs using OAuth credentials.
+    This also forces the initial authorization/token refresh.
+    """
+    access_token = get_oauth_credentials(client_secret_path)
+    if not access_token:
+        print("Fatal: Failed to obtain Blogger access token.")
+        return False
+        
+    list_url = 'https://www.googleapis.com/blogger/v3/users/self/blogs'
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    try:
+        response = requests.get(list_url, headers=headers)
+        response.raise_for_status()
+        
+        data = response.json()
+        blogs = data.get('items', [])
+        
+        print(f"Successfully connected! Retrieved {len(blogs)} blog(s).")
+        if blogs:
+            print("Visible blogs:")
+            for blog in blogs:
+                print(f"  - ID: {blog.get('id')} | Name: {blog.get('name')}")
+            return True
+        else:
+            print("Service is authorized but sees no blogs.")
+            return True # Still authorized, just no content
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Error listing accessible blogs: {e}")
+        if 'response' in locals() and response.status_code == 403:
+             print("Error: 403 Forbidden. Check Blogger API is enabled for your project and scopes were granted.")
+        return False
+        
+# --- NWS and Image Functions ---
 
 def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
     """
     Fetches the detailed weather forecast for a given lat/lon pair from the NWS API.
     """
-    # A generous timeout is used to accommodate slower NWS responses
-    TIMEOUT_SECONDS = 30 
-    
     try:
         # Step 1: Get the Grid Endpoint URL
         points_url = f"https://api.weather.gov/points/{lat_lon}"
-        # Using 'application/json' or 'application/geo+json' is appropriate here
         headers = {'User-Agent': user_agent, 'Accept': 'application/json'}
-        points_response = requests.get(points_url, headers=headers, timeout=TIMEOUT_SECONDS)
+        points_response = requests.get(points_url, headers=headers, timeout=15)
         points_response.raise_for_status() 
-        
-        # The 'forecastHourly' link is typically in the properties
         forecast_url = points_response.json().get('properties', {}).get('forecastHourly')
         
         if not forecast_url:
@@ -35,71 +123,37 @@ def get_nws_forecast(lat_lon: str, user_agent: str) -> Dict[str, Any]:
             return {}
 
         # Step 2: Get the Hourly Forecast Data
-        # Re-use the same user_agent and headers
-        forecast_response = requests.get(forecast_url, headers=headers, timeout=TIMEOUT_SECONDS)
+        forecast_response = requests.get(forecast_url, headers=headers, timeout=15)
         forecast_response.raise_for_status()
         
         return forecast_response.json().get('properties', {})
 
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error fetching NWS forecast for {lat_lon}: {e}")
-        return {}
     except requests.exceptions.RequestException as e:
-        print(f"Request Error fetching NWS forecast for {lat_lon}: {e}")
+        print(f"Error fetching NWS data: {e}")
         return {}
 
 def image_to_base64(image_path: str) -> str | None:
-    """Reads a local image and converts it to a Base64 string."""
+    """Converts a local image file to a Base64 string for embedding."""
     try:
         with open(image_path, "rb") as image_file:
-            # Encode the file content
-            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-            return encoded_string
-    except FileNotFoundError:
-        print(f"Error: Image file not found at {image_path}")
-        return None
+            return base64.b64encode(image_file.read()).decode('utf-8')
     except IOError as e:
-        print(f"Error reading image file: {e}")
+        print(f"Error reading image file {image_path}: {e}")
         return None
 
-# --- Blogger API Integration ---
-# Required scopes for posting to a Blogger blog
-BLOGGER_SCOPES = ["https://www.googleapis.com/auth/blogger"]
-
-def get_blogger_credentials(service_account_key_path: str) -> str | None:
-    """
-    Authenticates using the service account and returns an access token.
-    """
-    try:
-        # Load the credentials from the service account key file
-        credentials = service_account.Credentials.from_service_account_file(
-            service_account_key_path,
-            scopes=BLOGGER_SCOPES
-        )
-        
-        # Refresh the credentials to obtain a new access token
-        credentials.refresh(Request())
-        
-        if credentials.token:
-            return credentials.token
-        
-        print("Error: Credentials refresh failed to produce a token.")
-        return None
-
-    except Exception as e:
-        print(f"Error during Blogger service account authentication: {e}")
-        return None
+# --- MODIFIED: post_to_blogger function ---
 
 def post_to_blogger(
     blog_id: str,
     title: str,
     content_html: str,
-    service_account_key_path: str
+    client_secret_path: str # CHANGED: Argument is now the path to client secrets
 ) -> bool:
     """
-    Posts content to the specified Blogger blog.
+    Posts content to the specified Blogger blog using OAuth 2.0 credentials.
     """
-    access_token = get_blogger_credentials(service_account_key_path)
+    # Use the new OAuth credential retrieval function
+    access_token = get_oauth_credentials(client_secret_path)
     if not access_token:
         print("Failed to obtain Blogger access token.")
         return False
@@ -117,11 +171,10 @@ def post_to_blogger(
         "title": title,
         "content": content_html,
         "labels": ["Weather Forecast", "USA", "NationalWeatherService"], 
-        "isDraft": True # Set to True for testing, False for live publishing
+        "isDraft": False 
     }
     
     try:
-        # Wait a moment to respect API rate limits
         sleep(1) 
         response = requests.post(post_url, headers=headers, json=post_data)
         response.raise_for_status()
@@ -136,5 +189,5 @@ def post_to_blogger(
                 error_details = response.json()
                 print(f"Blogger API Error Details: {error_details.get('error', {}).get('message')}")
             except:
-                print("Could not parse error response from Blogger API.")
+                pass 
         return False
