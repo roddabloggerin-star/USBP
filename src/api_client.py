@@ -7,6 +7,7 @@ from typing import Dict, Any, List
 from google.auth.transport.requests import Request
 from urllib.parse import urlparse
 from time import sleep
+from blogger_post import create_post 
 
 # --- NEW OAUTH IMPORTS ---
 from google.oauth2.credentials import Credentials
@@ -158,13 +159,12 @@ def post_to_blogger(
     content_html: str,
     client_secret_path: str
 ) -> bool:
-    """
-    Posts content to the specified Blogger blog using OAuth 2.0 credentials.
-    No API key required when using a user access token.
-    """
-    access_token = get_oauth_credentials(client_secret_path)
-    if not access_token:
-        print("Failed to obtain Blogger access token.")
+    try:
+        post = create_post(title, content_html, is_draft=False)
+        print(f"Post successful. ID: {post.get('id')}")
+        return True
+    except Exception as e:
+        print(f"Error posting via blogger_post.create_post: {e}")
         return False
 
     # Pure OAuth endpoint: no ?key=... needed
