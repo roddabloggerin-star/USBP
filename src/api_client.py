@@ -13,6 +13,17 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 # --- END NEW OAUTH IMPORTS ---
 
+# at top of src/api_client.py, after other imports
+BLOGGER_API_KEY = os.getenv("BLOGGER_API_KEY")
+if not BLOGGER_API_KEY:
+    print("FATAL: BLOGGER_API_KEY environment variable not set. Check your .env file.")
+    raise SystemExit(1)
+# ========== BLOGGER API CONFIGURATION ==========
+
+# Base URL for the Blogger API  
+
+BLOGGER_API_BASE_URL = "https://www.googleapis.com/blogger/v3"
+
 # Blogger API Scopes (full read/write access is required for publishing)
 BLOGGER_SCOPES = ["https://www.googleapis.com/auth/blogger"]
 
@@ -157,19 +168,28 @@ def post_to_blogger(
 ) -> bool:
     """
     Posts content to the specified Blogger blog using OAuth 2.0 credentials.
-    Uses the REST API directly via requests (no googleapiclient, no blogger_post.create_post).
+    Uses:
+      - OAuth access token (user identity)
+      - Blogger API key (project identity)
     """
     access_token = get_oauth_credentials(client_secret_path)
     if not access_token:
         print("Failed to obtain Blogger access token.")
         return False
 
-    post_url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
+    base_url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
 
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
     }
+
+    # Attach API key if present (strongly recommended)
+    params = {}
+    if BLOGGER_API_KEY:
+        params["key"] = BLOGGER_API_KEY
+    else:
+        print("WARNING: BLOGGER_API_KEY is not set. Some methods may reject calls as 'unregistered callers'.")
 
     post_data = {
         "kind": "blogger#post",
@@ -180,18 +200,18 @@ def post_to_blogger(
     }
 
     try:
-        sleep(1)  # avoid hammering the API
-        response = requests.post(post_url, headers=headers, json=post_data)
+        sleep(1)  # avoid hitting short-term rate limits
+        response = requests.post(base_url, headers=headers, params=params, json=post_data)
         response.raise_for_status()
         print("Post successful.")
         return True
 
     except requests.exceptions.RequestException as e:
         print(f"Error posting to Blogger: {e}")
-        if "response" in locals():
-            try:
-                error_details = response.json()
-                print("Full Blogger API error:", json.dumps(error_details, indent=2))
-            except Exception:
-                pass
+        try:
+            error_details = response.json()
+            print("Full Blogger API error:", json.dumps(error_details, indent=2))
+        except Exception:
+            pass
         return False
+
