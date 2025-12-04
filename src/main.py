@@ -9,7 +9,7 @@ from typing import Dict, Any
 from src.image_utils import build_placeholder_image_tag
 from src.seo_utils import inject_seo_and_links
 
-from .api_client import (
+from src.api_client import (
     get_nws_forecast,
     post_to_blogger,
     list_accessible_blogs,
@@ -165,7 +165,7 @@ def main() -> None:
         title=title,
         content_html=content_html,
         client_secret_path=CLIENT_SECRETS_FILE,
-    )
+)
 
     if post_success:
         print(f"SUCCESS: Post for {target_zone_name} published.")
