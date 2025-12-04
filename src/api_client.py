@@ -7,7 +7,6 @@ from typing import Dict, Any, List
 from google.auth.transport.requests import Request
 from urllib.parse import urlparse
 from time import sleep
-from blogger_post import create_post 
 
 # --- NEW OAUTH IMPORTS ---
 from google.oauth2.credentials import Credentials
