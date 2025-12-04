@@ -5,6 +5,7 @@ import time
 from dotenv import load_dotenv
 from typing import Dict, Any, List
 
+from src.image_utils import build_placeholder_image_tag
 # We need to use relative imports because these are local files
 from .api_client import (
     # FIX 1: Import the correct function name: get_nws_forecast
@@ -153,25 +154,8 @@ def main():
 
     # --- 5. Create HTML Image Tag ---
     print(f"--- Creating Placeholder Image Tag for {target_zone_name} ---")
-    image_tag = ""
-    try:
-        # The function in api_client.py is named image_to_base64
-        image_base64 = image_to_base64(IMAGE_PATH) 
-        
-        if image_base64 is None:
-            print("FATAL: Failed to read image file. Cannot proceed.")
-            # Do not return, instead set image_tag to empty and continue posting
-            # to avoid losing the post content, but log the error.
-            image_tag = "" 
-        else:
-            image_tag = create_image_tag(
-                image_base64=image_base64, 
-                zone_name=target_zone_name
-            )
-    except Exception as e:
-        # Catch unexpected errors during image processing
-        print(f"WARNING: Image embedding failed with error: {e}. Posting without image.")
-        image_tag = "" # Ensure it's empty string for the content generator
+    image_tag = build_placeholder_image_tag(target_zone_name)
+
 
     # --- 6. Generating Blog Content ---
     print("\n--- Generating SEO-Optimized Blog Content (1000+ Words) ---")

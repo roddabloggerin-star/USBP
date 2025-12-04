@@ -1,20 +1,36 @@
 # src/content_generator.py
+
 from google import genai
 from google.genai import types
+from google.genai import errors  # Required for robust error handling
 from typing import Dict, Any, List
 import json
+import time
 
 # Define the Gemini model we are using
 MODEL_NAME = "gemini-2.5-flash"
 
-# --- CRITICAL FIX: Add the Timeout Constant to prevent hanging ---
-API_TIMEOUT_SECONDS = 120 # Set a 2-minute (120 seconds) timeout for content generation
-# --- END CRITICAL FIX ---
+# Timeout constant (you can wire this into your HTTP stack if needed)
+API_TIMEOUT_SECONDS = 120
 
 # Initialize the Gemini client here.
 client = genai.Client()
 
-# --- Define the JSON Schema for the expected output ---
+# --- Constants for token control / compaction ---
+MAX_CITIES_PER_ZONE = 10           # Hard cap on how many cities per zone we send to Gemini
+MAX_ALERTS_PER_CITY = 2            # Max alerts to include per city
+KEY_HOURLY_INDICES = [0, 12]       # Representative hourly points (~now and ~12h later)
+
+# SAFETY: Max characters allowed for outline text before final expansion
+MAX_OUTLINE_CHARS = 4000           # Strict cap to guarantee low tokens in final_prompt
+
+# Markers used inside model output instead of full HTML
+IMAGE_MARKER = "[[IMAGE_TAG_HERE]]"
+DISCLAIMER_MARKER = "[[DISCLAIMER_HERE]]"
+
+# --- JSON Schemas ---
+
+# Final blog post schema
 BLOG_POST_SCHEMA = types.Schema(
     type=types.Type.OBJECT,
     properties={
@@ -33,7 +49,18 @@ BLOG_POST_SCHEMA = types.Schema(
     },
     required=["title", "meta_description", "content_html"]
 )
-# --- END NEW SCHEMA ---
+
+# Outline schema (used in first step)
+OUTLINE_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "outline": types.Schema(
+            type=types.Type.STRING,
+            description="Compact outline with headings and bullets for the blog post."
+        )
+    },
+    required=["outline"]
+)
 
 # Define system instruction for the AI model to ensure quality and compliance
 SYSTEM_INSTRUCTION = (
@@ -41,7 +68,7 @@ SYSTEM_INSTRUCTION = (
     "for the USA market. Your goal is to write detailed, engaging, and high-value "
     "weather forecast articles based on the provided data. "
     "CRITICAL RULES: "
-    "1. The final content MUST be over 100 words. Expand thoughtfully on topics like climate history, agricultural impact, travel advisories, and preparation tips."
+    "1. The final content MUST be over 1000 words. Expand thoughtfully on topics like climate history, agricultural impact, travel advisories, and preparation tips."
     "2. Format the content using clean HTML tags (<h1>, <h2>, <p>, <ul>, <strong>, <em>, <a>, <img>)."
     "3. DO NOT use any phrases that mention AI generation, 'AI-generated', 'written by AI', 'bot', 'large language model', etc. The post must appear as if written by a human expert."
     "4. Focus on compounding value by providing rich, educational context around the weather."
@@ -49,77 +76,186 @@ SYSTEM_INSTRUCTION = (
     "6. **CRITICAL JSON RULE:** Ensure all string fields, especially 'content_html', are perfectly valid JSON by escaping all internal double quotes (use \\\" for quotes within the HTML string) and avoiding raw newlines."
 )
 
-def format_forecast_for_gemini(city_data: Dict[str, Any], city_forecasts: Dict[str, Any]) -> str:
+# ------------------------------
+# COMPACT DATA PREPARATION
+# ------------------------------
+
+
+def select_representative_cities(
+    city_forecasts: Dict[str, Any],
+    max_cities: int = MAX_CITIES_PER_ZONE
+) -> List[str]:
     """
-    Formats the aggregated city data, including current conditions and alerts,
-    into a single string for inclusion in the Gemini API prompt.
-    
-    NOTE: This function filters the hourly forecast data to the NEXT 24 PERIODS.
+    Heuristic selection of representative cities:
+      - prioritize cities with more active alerts
+      - then by lower temperatures (to surface extremes)
+      - fallback: preserves order when things are equal
+
+    This is a defensive limit so upstream data cannot blow up tokens.
     """
-    output = []
-    
-    # 1. Zone Information
-    output.append(f"--- WEATHER ZONE: {city_data['id'].upper()} ---")
-    output.append(f"Primary City: {city_data['cities'][0]['city']}")
-    
-    # 2. Aggregated Weather Data (Current, Alerts, 24-Hour Forecast)
-    output.append("\n--- AGGREGATED CITY WEATHER DATA ---\n")
+    scored: List[tuple] = []
+
     for city, data in city_forecasts.items():
-        output.append(f"\n--- CITY: {city} ---\n")
-        
-        # --- ALERTS (Point 2 of request) ---
-        alerts = data.get('alerts', [])
-        if alerts:
-            output.append(f"*** ACTIVE WEATHER ALERTS ({len(alerts)}) - CRITICAL: ***")
-            for alert in alerts:
-                props = alert.get('properties', {})
-                headline = props.get('headline', 'No Headline')
-                severity = props.get('severity', 'Unknown')
-                event = props.get('event', 'Unknown Event')
-                # Include the full text description as well
-                description = props.get('description', '').replace('\n', ' ').strip()
-                output.append(f"  - ALERT: {event} | Severity: {severity} | Headline: {headline} | Description: {description}")
-        else:
-            output.append("No active weather alerts for this city.")
-            
-        # --- CURRENT CONDITIONS (Point 1 of request) ---
-        current = data.get('current_conditions', {})
-        if current:
-            temp_f = current.get('temperature', {}).get('value') # NWS returns Celsius for temperature, we will instruct AI to convert
-            text_desc = current.get('textDescription')
-            wind_speed = current.get('windSpeed', {}).get('value')
-            
-            # Convert NWS Celsius to Fahrenheit for easier blog integration (optional but helpful)
-            if temp_f is not None:
-                 # Standard NWS observation temperature is in Celsius. AI will use this in prompt
-                output.append("\nCURRENT CONDITIONS (NWS C/metric):")
-                output.append(f"  - Temperature: {temp_f}°C") 
-            
-            output.append(f"  - Description: {text_desc}")
-            output.append(f"  - Wind Speed: {wind_speed} knots") 
-        else:
-             output.append("Current condition data unavailable.")
-        
-        # --- 24-HOUR HOURLY FORECAST (Point 3 of request) ---
-        forecast = data.get('forecast_hourly', {})
-        if forecast:
-            output.append("\nNEXT 24 HOURS HOURLY FORECAST:")
-            # CRITICAL: Filter periods to the first 24 only
-            periods = forecast.get('periods', [])[:24] 
-            
-            for period in periods:
-                start_time = period.get('startTime')
-                temperature = period.get('temperature') # This is usually Fahrenheit for hourly forecast
-                wind_speed = period.get('windSpeed')
-                short_forecast = period.get('shortForecast')
-                
-                output.append(
-                    f"  - {start_time}: Temp={temperature}°F, Wind={wind_speed}, Forecast='{short_forecast}'"
-                )
-        else:
-            output.append("Hourly forecast data unavailable.")
-            
-    return "\n".join(output)
+        alerts = data.get("alerts") or []
+        alert_count = len(alerts)
+
+        # current temp as tie-breaker (C if available)
+        temp_val = None
+        cur = data.get("current_conditions") or {}
+        t_obj = cur.get("temperature")
+        if isinstance(t_obj, dict):
+            try:
+                temp_val = float(t_obj.get("value") or 0.0)
+            except Exception:
+                temp_val = None
+
+        # score: more alerts = higher, lower temp slightly prioritized
+        score = (alert_count, - (temp_val if temp_val is not None else 0.0))
+        scored.append((score, city))
+
+    # sort descending by score
+    scored.sort(reverse=True)
+    selected = [c for (_, c) in scored[:max_cities]]
+
+    return selected
+
+
+def compact_city_line(city: str, data: Dict[str, Any]) -> str:
+    """
+    Produce a single compact, pipe-delimited summary line for a city.
+
+    Example:
+      CITY_NAME|temp_C=12.3|desc=Mostly sunny|wind=8.0|alerts=1|alert_heads=Flood Watch|points=2025-01-01T12:00Z|72F|5kt|Sunny;;2025-01-01T00:00Z|65F|10kt|Showers
+    """
+    parts: List[str] = [city]
+
+    # Current temperature (C) if available
+    current = data.get("current_conditions") or {}
+    temp_val = None
+    t = current.get("temperature")
+    if isinstance(t, dict):
+        temp_val = t.get("value")
+    parts.append(f"temp_C={temp_val if temp_val is not None else 'N/A'}")
+
+    # Description (flattened)
+    desc = current.get("textDescription") or "N/A"
+    desc_short = desc.replace("\n", " ").replace("|", " ").strip()
+    parts.append(f"desc={desc_short}")
+
+    # Wind speed (metric value if available)
+    w = current.get("windSpeed") or {}
+    if isinstance(w, dict):
+        w_val = w.get("value")
+    else:
+        w_val = w
+    parts.append(f"wind={w_val if w_val is not None else 'N/A'}")
+
+    # Alerts (count + short headlines)
+    alerts = data.get("alerts") or []
+    parts.append(f"alerts={len(alerts)}")
+    if alerts:
+        alert_heads: List[str] = []
+        for al in alerts[:MAX_ALERTS_PER_CITY]:
+            props = al.get("properties") or {}
+            headline = (
+                props.get("headline")
+                or props.get("event")
+                or "NoHeadline"
+            )
+            alert_heads.append(headline.replace("|", " ").replace("\n", " ").strip())
+        parts.append("alert_heads=" + ";".join(alert_heads))
+
+    # Hourly forecast: pick a few key points
+    forecast = data.get("forecast_hourly") or {}
+    periods = forecast.get("periods") or []
+    hourly_parts: List[str] = []
+
+    for idx in KEY_HOURLY_INDICES:
+        if idx < len(periods):
+            p = periods[idx]
+            st = p.get("startTime", "N/A")
+            tempf = p.get("temperature", "N/A")
+            wf = p.get("windSpeed", "N/A")
+            sf = (p.get("shortForecast") or "N/A").replace("|", " ").replace("\n", " ")
+
+            hourly_parts.append(f"{st}|{tempf}|{wf}|{sf}")
+
+    if hourly_parts:
+        parts.append("points=" + ";;".join(hourly_parts))
+
+    return "|".join(parts)
+
+
+def format_forecast_for_gemini(
+    city_data: Dict[str, Any],
+    city_forecasts: Dict[str, Any]
+) -> str:
+    """
+    Compact formatter to drastically reduce token usage while preserving
+    essential context.
+
+    It produces:
+      - One header line with zone-level aggregates (avg temp, max wind, total alerts).
+      - A line announcing how many representative cities are included.
+      - One compact summary line per selected city (up to MAX_CITIES_PER_ZONE).
+    """
+    temps: List[float] = []
+    total_alerts = 0
+    max_wind_val = None
+
+    # Aggregate basic stats across all cities
+    for _, d in city_forecasts.items():
+        cur = d.get("current_conditions") or {}
+        t = cur.get("temperature")
+        if isinstance(t, dict) and t.get("value") is not None:
+            try:
+                temps.append(float(t.get("value")))
+            except Exception:
+                pass
+
+        alerts = d.get("alerts") or []
+        total_alerts += len(alerts)
+
+        w = cur.get("windSpeed")
+        if isinstance(w, dict) and w.get("value") is not None:
+            try:
+                wv = float(w.get("value"))
+                if max_wind_val is None or wv > max_wind_val:
+                    max_wind_val = wv
+            except Exception:
+                pass
+
+    avg_temp = round(sum(temps) / len(temps), 1) if temps else "N/A"
+    max_wind = round(max_wind_val, 1) if max_wind_val is not None else "N/A"
+
+    header = (
+        f"ZONE={city_data.get('id', 'N/A')}"
+        f"|PRIMARY={city_data.get('cities', [{}])[0].get('city', 'N/A')}"
+        f"|AVG_TEMP_C={avg_temp}"
+        f"|MAX_WIND={max_wind}"
+        f"|TOTAL_ALERTS={total_alerts}"
+    )
+
+    lines: List[str] = [header]
+
+    # Defensive city selection (never trust upstream data size)
+    selected = select_representative_cities(city_forecasts, MAX_CITIES_PER_ZONE)
+    if not selected:
+        selected = list(city_forecasts.keys())[:MAX_CITIES_PER_ZONE]
+
+    lines.append(f"REPRESENTATIVE_COUNT={len(selected)}")
+
+    for city in selected:
+        data = city_forecasts.get(city, {}) or {}
+        lines.append(compact_city_line(city, data))
+
+    compact_string = "\n".join(lines)
+    return compact_string
+
+
+# ------------------------------
+# CONTENT GENERATION
+# ------------------------------
 
 
 def generate_blog_content(
@@ -130,51 +266,173 @@ def generate_blog_content(
     disclaimer_html: str,
 ) -> Dict[str, str] | None:
     """
-    Calls the Gemini API to generate the blog post content, guaranteeing JSON output via schema.
+    Two-step generation to keep token usage low while still producing
+    a 1000+ word blog post:
+
+      1) Outline step:
+         - Input: very compact zone/city summary (few hundred tokens).
+         - Output: JSON { "outline": "<text>" }.
+
+      2) Final step:
+         - Input: outline (hard-capped length) + instructions with lightweight
+           markers for image and disclaimer.
+         - Output: JSON { "title", "meta_description", "content_html" }.
     """
-    
-    formatted_data = format_forecast_for_gemini(city_data, city_forecasts)
-    
-    full_data_prompt = f"--- RAW DATA START ---\n\n{formatted_data}\n\n--- RAW DATA END ---"
-    
-    prompt_instruction = (
-        f"**TOPIC:** Generate an over 1000-word weather blog post for the **{zone_name}** zone. "
-        "The content must be rich, detailed, and based solely on the data provided below. "
-        "The final output JSON object MUST contain 'title', 'meta_description', and 'content_html'. "
-    )
-    
-    # Combine prompts
-    full_prompt = (
-        prompt_instruction + "\n\n" + 
-        full_data_prompt + "\n\n" +
-        f"**IMPORTANT INSTRUCTIONS for content_html:**\n"
-        f"1. Embed the image tag: `{image_tag}` near the beginning of the `content_html` body (e.g., after the first paragraph or H1)."
-        f"2. Append the disclaimer HTML: `{disclaimer_html}` to the very end of the `content_html` body."
-        f"3. Ensure the final `content_html` results in a total size that is safe for Blogger (well under 5MB)."
-    )
 
+    # Basic debug of inputs
     try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=[full_prompt],
-            # CRITICAL FIX: Timeout parameter moved here, outside of config
-            # timeout=API_TIMEOUT_SECONDS, 
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=BLOG_POST_SCHEMA, 
-                temperature=0.7 
-            )
-        )
-        
-        # The response.text is now guaranteed to be valid JSON
-        return json.loads(response.text)
+        print(f"DEBUG: number of cities in city_forecasts = {len(city_forecasts)}")
+    except Exception:
+        pass
+    print(f"DEBUG: len(image_tag) = {len(image_tag)} chars")
+    print(f"DEBUG: len(disclaimer_html) = {len(disclaimer_html)} chars")
 
-    except json.JSONDecodeError as e:
-        print(f"FATAL: The model returned invalid JSON despite schema enforcement.")
-        print(f"Error details: {e}")
+    # 1) Build compact data and outline prompt
+    compact_data = format_forecast_for_gemini(city_data, city_forecasts)
+
+    outline_prompt = (
+        f"WEATHER ZONE DATA (COMPACT):\n{compact_data}\n\n"
+        f"ZONE NAME: {zone_name}\n\n"
+        "TASK: Based only on the compact data above, generate a concise outline for a long-form, SEO-optimized weather blog post "
+        "about this zone for a US audience. The outline should include:\n"
+        "- 1 overall H1 concept\n"
+        "- 5–7 H2 sections\n"
+        "- 1–3 short bullet points for each H2 describing what that section will cover.\n\n"
+        "Return ONLY a JSON object with a single string field 'outline' that contains the full outline in plain text. "
+        "Do not include any explanations outside JSON."
+    )
+
+    # Debug: token count for outline prompt
+    try:
+        tok = client.models.count_tokens(model=MODEL_NAME, contents=[outline_prompt])
+        print(f"DEBUG: outline_prompt token count estimate: {tok.total_tokens}")
+    except Exception:
+        pass
+
+    # 1) Outline step with simple retry on 429
+    outline_response: Dict[str, Any] | None = None
+    MAX_OUTLINE_RETRIES = 3
+    BASE_OUTLINE_DELAY = 5
+
+    for attempt in range(MAX_OUTLINE_RETRIES):
+        try:
+            r = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=[outline_prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                    response_schema=OUTLINE_SCHEMA,
+                    temperature=0.2,
+                ),
+            )
+            outline_response = json.loads(r.text)
+            break
+        except errors.ClientError as e:
+            if e.code == 429 and attempt < MAX_OUTLINE_RETRIES - 1:
+                wait = BASE_OUTLINE_DELAY * (2 ** attempt)
+                print(f"Outline step rate-limited (429). Retrying in {wait:.1f}s (attempt {attempt + 1}/{MAX_OUTLINE_RETRIES}).")
+                time.sleep(wait)
+                continue
+            print(f"FATAL: Outline generation failed with ClientError (code={e.code}).")
+            print(f"Details: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            print("FATAL: Outline step returned invalid JSON.")
+            print(f"Details: {e}")
+            return None
+        except Exception as e:
+            print(f"Unexpected error during outline generation: {e}")
+            return None
+
+    if not outline_response:
+        print("FATAL: Outline generation returned no response.")
         return None
-    except Exception as e:
-        # This will catch the Timeout error if the request takes longer than 120s
-        print(f"An error occurred during content generation: {e}")
+
+    outline_text = outline_response.get("outline", "")
+    if not outline_text:
+        print("FATAL: Outline response has empty 'outline' field.")
         return None
+
+    # SAFETY: hard cap outline length to guarantee final_prompt is small
+    if len(outline_text) > MAX_OUTLINE_CHARS:
+        print(f"DEBUG: outline_text too long ({len(outline_text)} chars). Truncating to {MAX_OUTLINE_CHARS} chars.")
+        outline_text = outline_text[:MAX_OUTLINE_CHARS]
+
+    print(f"DEBUG: outline_text length after cap: {len(outline_text)} chars")
+
+    # 2) Build final generation prompt using the (possibly truncated) outline
+    final_prompt = (
+        f"Use the following OUTLINE to write a full HTML weather blog post for the zone '{zone_name}':\n\n"
+        f"{outline_text}\n\n"
+        "CONSTRAINTS:\n"
+        "- The post MUST be at least 1000 words.\n"
+        "- Use a single <h1> for the main title and multiple <h2> headings based on the outline.\n"
+        "- Use <p> for paragraphs and <ul>/<li> where lists make sense.\n"
+        "- The tone should be expert, clear, and helpful for a US audience interested in practical weather, travel, and preparedness insights.\n"
+        "- Do NOT mention AI, models, or anything about being generated.\n"
+        f"- Insert the literal marker {IMAGE_MARKER} near the beginning of the article (after the <h1> or first paragraph). "
+        "Do NOT modify this marker text.\n"
+        f"- Insert the literal marker {DISCLAIMER_MARKER} at the very end of the article content. "
+        "Do NOT modify this marker text.\n"
+        "- Provide a short, SEO-focused 'title' (max 70 characters) and 'meta_description' (max 160 characters).\n"
+        "- Return ONLY a JSON object with the fields: 'title', 'meta_description', 'content_html'. "
+        "The 'content_html' must be a single HTML string (no markdown, no extra JSON)."
+    )
+
+    # Debug: prompt size and token count
+    print(f"DEBUG: len(final_prompt) = {len(final_prompt)} chars")
+    try:
+        tok2 = client.models.count_tokens(model=MODEL_NAME, contents=[final_prompt])
+        print(f"DEBUG: final_prompt token count estimate: {tok2.total_tokens}")
+    except Exception:
+        pass
+
+    # 2) Final generation with retry on 429
+    MAX_RETRIES = 5
+    BASE_DELAY = 5
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=[final_prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                    response_schema=BLOG_POST_SCHEMA,
+                    temperature=0.6,
+                ),
+            )
+            result = json.loads(response.text)
+
+            # Inject the real image tag and disclaimer HTML where the markers are
+            content = result.get("content_html", "")
+            if content:
+                content = content.replace(IMAGE_MARKER, image_tag)
+                content = content.replace(DISCLAIMER_MARKER, disclaimer_html)
+                result["content_html"] = content
+
+            return result
+
+        except errors.ClientError as e:
+            if e.code == 429 and attempt < MAX_RETRIES - 1:
+                delay = BASE_DELAY * (2 ** attempt)
+                print(f"Final generation rate-limited (429). Retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}).")
+                time.sleep(delay)
+                continue
+            print(f"FATAL: Gemini API Client Error on final generation (code={e.code}).")
+            print(f"Details: {e}")
+            return None
+
+        except json.JSONDecodeError as e:
+            print("FATAL: The model returned invalid JSON in the final step.")
+            print(f"Details: {e}")
+            return None
+
+        except Exception as e:
+            print(f"Unexpected error during final content generation: {e}")
+            return None
+
+    # If the loop somehow finishes without returning, fail explicitly
+    return None
