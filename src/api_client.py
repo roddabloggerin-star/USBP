@@ -7,6 +7,7 @@ import os
 from typing import Dict, Any
 from google.auth.transport.requests import Request
 from time import sleep
+from typing import Optional, List
 
 # --- NEW OAUTH IMPORTS ---
 from google.oauth2.credentials import Credentials
@@ -165,12 +166,11 @@ def post_to_blogger(
     title: str,
     content_html: str,
     client_secret_path: str,
+    labels: Optional[List[str]] = None,
 ) -> bool:
     """
     Posts content to the specified Blogger blog using OAuth 2.0 credentials.
-    Uses:
-      - OAuth access token (user identity)
-      - Blogger API key (project identity)
+    Uses the REST API directly via requests.
     """
     access_token = get_oauth_credentials(client_secret_path)
     if not access_token:
@@ -184,24 +184,20 @@ def post_to_blogger(
         "Content-Type": "application/json",
     }
 
-    # Attach API key if present (strongly recommended)
-    params = {}
-    if BLOGGER_API_KEY:
-        params["key"] = BLOGGER_API_KEY
-    else:
-        print("WARNING: BLOGGER_API_KEY is not set. Some methods may reject calls as 'unregistered callers'.")
+    if labels is None or not labels:
+        labels = ["Weather Forecast", "USA", "NationalWeatherService"]
 
     post_data = {
         "kind": "blogger#post",
         "blog": {"id": blog_id},
         "title": title,
         "content": content_html,
-        "labels": ["Weather Forecast", "USA", "NationalWeatherService"],
+        "labels": labels,
     }
 
     try:
-        sleep(1)  # avoid hitting short-term rate limits
-        response = requests.post(base_url, headers=headers, params=params, json=post_data)
+        sleep(1)  # avoid hammering the API
+        response = requests.post(base_url, headers=headers, json=post_data)
         response.raise_for_status()
         print("Post successful.")
         return True
