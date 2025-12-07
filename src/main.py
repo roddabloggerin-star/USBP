@@ -151,11 +151,12 @@ def main() -> None:
     meta_description = blog_payload.get("meta_description", "")
     content_html = blog_payload["content_html"]
 
-    # 6) Inject SEO schema + internal links
+    # 6) Inject SEO schema + internal links (now also passes meta_description)
     content_html = inject_seo_and_links(
         content_html=content_html,
         title=title,
         zone_name=target_zone_name,
+        meta_description=meta_description,
     )
 
     # 7) Save locally and update indexes (dashboard, archive, categories, sitemap)
