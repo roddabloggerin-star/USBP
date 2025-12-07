@@ -39,11 +39,12 @@ def get_creds():
     # found, run the authorization flow
     if not creds or not creds.valid:
         if not Path(CLIENT_SECRETS_FILE).exists():
-            print(f"CRITICAL ERROR: {CLIENT_SECRETS_FILE} not found.
-Please download it from GCP and place it in the project root.")
+            print(f"""CRITICAL ERROR: {CLIENT_SECRETS_FILE} not found.
+Please download it from GCP and place it in the project root.""")
             return None
             
         print("Running authorization flow. A browser window will open...")
+            
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
         creds = flow.run_local_server(port=0)  # opens browser for user consent
     
