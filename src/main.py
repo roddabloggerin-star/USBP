@@ -22,7 +22,7 @@ CLIENT_SECRETS_FILE = "client_secrets.json"
 DISCLAIMER_HTML = (
     "<p style=\"font-size: 0.8em; color: #888;\">"
     "This post is created using the public data provided by the National Weather Service. "
-    "Please check the **<a href=\"https://www.weather.gov/\" target=\"_blank\" style=\"color: #007bff; text-decoration: none;\">Original source</a>** for more information."
+    "Please check the <a href=\"https://www.weather.gov/\" target=\"_blank\" style=\"color: #007bff; text-decoration: none;\">Original source</a> for more information."
     "</p>"
 )
 

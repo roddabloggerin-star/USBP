@@ -17,7 +17,7 @@ API_TIMEOUT_SECONDS = 120
 client = genai.Client()
 
 # --- Constants for token control / compaction ---
-MAX_CITIES_PER_ZONE = 10           # Hard cap on how many cities per zone we send to Gemini
+MAX_CITIES_PER_ZONE = 15           # Hard cap on how many cities per zone we send to Gemini
 MAX_ALERTS_PER_CITY = 2            # Max alerts to include per city
 KEY_HOURLY_INDICES = [0, 12]       # Representative hourly points (~now and ~12h later)
 
