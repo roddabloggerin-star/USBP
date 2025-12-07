@@ -2,7 +2,7 @@
 
 from google import genai
 from google.genai import types
-from google.genai import errors  # Required for robust error handling
+from google.genai import errors
 from typing import Dict, Any, List
 import json
 import time
@@ -20,9 +20,6 @@ client = genai.Client()
 MAX_CITIES_PER_ZONE = 15           # Hard cap on how many cities per zone we send to Gemini
 MAX_ALERTS_PER_CITY = 2            # Max alerts to include per city
 KEY_HOURLY_INDICES = [0, 12]       # Representative hourly points (~now and ~12h later)
-
-# SAFETY: Max characters allowed for outline text before final expansion
-MAX_OUTLINE_CHARS = 4000           # Strict cap to guarantee low tokens in final_prompt
 
 # Markers used inside model output instead of full HTML
 IMAGE_MARKER = "[[IMAGE_TAG_HERE]]"
@@ -50,23 +47,13 @@ BLOG_POST_SCHEMA = types.Schema(
     required=["title", "meta_description", "content_html"]
 )
 
-# Outline schema (used in first step)
-OUTLINE_SCHEMA = types.Schema(
-    type=types.Type.OBJECT,
-    properties={
-        "outline": types.Schema(
-            type=types.Type.STRING,
-            description="Compact outline with headings and bullets for the blog post."
-        )
-    },
-    required=["outline"]
-)
+# NOTE: The OUTLINE_SCHEMA is removed as we now only make one request.
 
 # Define system instruction for the AI model to ensure quality and compliance
 SYSTEM_INSTRUCTION = (
     "You are a professional weather journalist specializing in SEO-optimized blog content "
-    "for the USA market. Your goal is to write detailed, engaging, and high-value "
-    "weather forecast articles based on the provided data. "
+    "for the USA market. Your goal is to write a detailed, engaging, and high-value "
+    "weather forecast article based on the provided data. "
     "CRITICAL RULES: "
     "1. The final content MUST be over 1000 words. Expand thoughtfully on topics like climate history, agricultural impact, travel advisories, and preparation tips."
     "2. Format the content using clean HTML tags (<h1>, <h2>, <p>, <ul>, <strong>, <em>, <a>, <img>)."
@@ -74,10 +61,11 @@ SYSTEM_INSTRUCTION = (
     "4. Focus on compounding value by providing rich, educational context around the weather."
     "5. Use US English and tailor the tone for a US audience."
     "6. **CRITICAL JSON RULE:** Ensure all string fields, especially 'content_html', are perfectly valid JSON by escaping all internal double quotes (use \\\" for quotes within the HTML string) and avoiding raw newlines."
+    "7. Structure the article with a single <h1> main title and multiple relevant <h2> sections."
 )
 
 # ------------------------------
-# COMPACT DATA PREPARATION
+# COMPACT DATA PREPARATION (NO CHANGE)
 # ------------------------------
 
 
@@ -254,7 +242,7 @@ def format_forecast_for_gemini(
 
 
 # ------------------------------
-# CONTENT GENERATION
+# CONTENT GENERATION (REFACTORED TO SINGLE CALL)
 # ------------------------------
 
 
@@ -266,17 +254,8 @@ def generate_blog_content(
     disclaimer_html: str,
 ) -> Dict[str, str] | None:
     """
-    Two-step generation to keep token usage low while still producing
-    a 1000+ word blog post:
-
-      1) Outline step:
-         - Input: very compact zone/city summary (few hundred tokens).
-         - Output: JSON { "outline": "<text>" }.
-
-      2) Final step:
-         - Input: outline (hard-capped length) + instructions with lightweight
-           markers for image and disclaimer.
-         - Output: JSON { "title", "meta_description", "content_html" }.
+    Refactored to a single-step generation to produce a 1000+ word blog post
+    in a single API call, reducing the run's API request count to one.
     """
 
     # Basic debug of inputs
@@ -287,87 +266,18 @@ def generate_blog_content(
     print(f"DEBUG: len(image_tag) = {len(image_tag)} chars")
     print(f"DEBUG: len(disclaimer_html) = {len(disclaimer_html)} chars")
 
-    # 1) Build compact data and outline prompt
+    # 1) Build compact data
     compact_data = format_forecast_for_gemini(city_data, city_forecasts)
 
-    outline_prompt = (
+    # 2) Build the single, combined prompt
+    final_prompt = (
         f"WEATHER ZONE DATA (COMPACT):\n{compact_data}\n\n"
         f"ZONE NAME: {zone_name}\n\n"
-        "TASK: Based only on the compact data above, generate a concise outline for a long-form, SEO-optimized weather blog post "
-        "about this zone for a US audience. The outline should include:\n"
-        "- 1 overall H1 concept\n"
-        "- 5–7 H2 sections\n"
-        "- 1–3 short bullet points for each H2 describing what that section will cover.\n\n"
-        "Return ONLY a JSON object with a single string field 'outline' that contains the full outline in plain text. "
-        "Do not include any explanations outside JSON."
-    )
-
-    # Debug: token count for outline prompt
-    try:
-        tok = client.models.count_tokens(model=MODEL_NAME, contents=[outline_prompt])
-        print(f"DEBUG: outline_prompt token count estimate: {tok.total_tokens}")
-    except Exception:
-        pass
-
-    # 1) Outline step with simple retry on 429
-    outline_response: Dict[str, Any] | None = None
-    MAX_OUTLINE_RETRIES = 3
-    BASE_OUTLINE_DELAY = 5
-
-    for attempt in range(MAX_OUTLINE_RETRIES):
-        try:
-            r = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=[outline_prompt],
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    response_mime_type="application/json",
-                    response_schema=OUTLINE_SCHEMA,
-                    temperature=0.2,
-                ),
-            )
-            outline_response = json.loads(r.text)
-            break
-        except errors.ClientError as e:
-            if e.code == 429 and attempt < MAX_OUTLINE_RETRIES - 1:
-                wait = BASE_OUTLINE_DELAY * (2 ** attempt)
-                print(f"Outline step rate-limited (429). Retrying in {wait:.1f}s (attempt {attempt + 1}/{MAX_OUTLINE_RETRIES}).")
-                time.sleep(wait)
-                continue
-            print(f"FATAL: Outline generation failed with ClientError (code={e.code}).")
-            print(f"Details: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            print("FATAL: Outline step returned invalid JSON.")
-            print(f"Details: {e}")
-            return None
-        except Exception as e:
-            print(f"Unexpected error during outline generation: {e}")
-            return None
-
-    if not outline_response:
-        print("FATAL: Outline generation returned no response.")
-        return None
-
-    outline_text = outline_response.get("outline", "")
-    if not outline_text:
-        print("FATAL: Outline response has empty 'outline' field.")
-        return None
-
-    # SAFETY: hard cap outline length to guarantee final_prompt is small
-    if len(outline_text) > MAX_OUTLINE_CHARS:
-        print(f"DEBUG: outline_text too long ({len(outline_text)} chars). Truncating to {MAX_OUTLINE_CHARS} chars.")
-        outline_text = outline_text[:MAX_OUTLINE_CHARS]
-
-    print(f"DEBUG: outline_text length after cap: {len(outline_text)} chars")
-
-    # 2) Build final generation prompt using the (possibly truncated) outline
-    final_prompt = (
-        f"Use the following OUTLINE to write a full HTML weather blog post for the zone '{zone_name}':\n\n"
-        f"{outline_text}\n\n"
+        "TASK: Based only on the compact data above, write a full HTML weather blog post for the zone "
+        f"'{zone_name}' for a US audience. The content MUST adhere to all rules in the System Instruction.\n\n"
         "CONSTRAINTS:\n"
         "- The post MUST be at least 1000 words.\n"
-        "- Use a single <h1> for the main title and multiple <h2> headings based on the outline.\n"
+        "- Use a single <h1> for the main title and multiple <h2> headings to structure the content (e.g., 'Current Conditions', 'Looking Ahead: The Hourly Forecast', 'Weather Advisories', 'Preparedness Tips').\n"
         "- Use <p> for paragraphs and <ul>/<li> where lists make sense.\n"
         "- The tone should be expert, clear, and helpful for a US audience interested in practical weather, travel, and preparedness insights.\n"
         "- Do NOT mention AI, models, or anything about being generated.\n"
@@ -381,14 +291,15 @@ def generate_blog_content(
     )
 
     # Debug: prompt size and token count
+    print(f"\n--- Starting Single-Call Generation ---\n")
     print(f"DEBUG: len(final_prompt) = {len(final_prompt)} chars")
     try:
-        tok2 = client.models.count_tokens(model=MODEL_NAME, contents=[final_prompt])
-        print(f"DEBUG: final_prompt token count estimate: {tok2.total_tokens}")
+        tok = client.models.count_tokens(model=MODEL_NAME, contents=[final_prompt])
+        print(f"DEBUG: final_prompt token count estimate: {tok.total_tokens}")
     except Exception:
         pass
 
-    # 2) Final generation with retry on 429
+    # 3) Final generation with retry on 429
     MAX_RETRIES = 5
     BASE_DELAY = 5
 
@@ -418,20 +329,20 @@ def generate_blog_content(
         except errors.ClientError as e:
             if e.code == 429 and attempt < MAX_RETRIES - 1:
                 delay = BASE_DELAY * (2 ** attempt)
-                print(f"Final generation rate-limited (429). Retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}).")
+                print(f"Content generation rate-limited (429). Retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}).")
                 time.sleep(delay)
                 continue
-            print(f"FATAL: Gemini API Client Error on final generation (code={e.code}).")
+            print(f"FATAL: Gemini API Client Error (code={e.code}) on single-call generation.")
             print(f"Details: {e}")
             return None
 
         except json.JSONDecodeError as e:
-            print("FATAL: The model returned invalid JSON in the final step.")
+            print("FATAL: The model returned invalid JSON in the content generation step.")
             print(f"Details: {e}")
             return None
 
         except Exception as e:
-            print(f"Unexpected error during final content generation: {e}")
+            print(f"Unexpected error during content generation: {e}")
             return None
 
     # If the loop somehow finishes without returning, fail explicitly
