@@ -1,0 +1,55 @@
+# -------------------------------------------------------------------------
+# Environment and Secrets Files (CRITICAL: DO NOT COMMIT)
+# -------------------------------------------------------------------------
+# Stores environment variables (API keys, etc.) used for local development
+.env
+
+# Blogger OAuth 2.0 Credentials (contains refresh token)
+# This file is successfully generated locally and should be kept secret.
+token.json
+client_secrets.json
+
+# Temporary file for old/local Service Account key (based on main.py snippet)
+service_account_key.json
+
+# -------------------------------------------------------------------------
+# Python Artifacts and Local State
+# -------------------------------------------------------------------------
+# Python object cache files
+__pycache__/
+*.pyc
+
+# Virtual environment directories
+venv/
+.venv/
+
+# Build/distribution files
+*.egg-info/
+dist/
+build/
+
+# Python test and documentation cache
+.pytest_cache/
+htmlcov/
+
+# The state file used for zone rotation (updated every run)
+
+
+# -------------------------------------------------------------------------
+# Media Files (Optional: If the image is large or changes frequently)
+# -------------------------------------------------------------------------
+# The local image file that is base64 encoded by the script
+# UNCOMMENT this line if you do NOT want to commit the image.png file.
+# image.png
+
+# -------------------------------------------------------------------------
+# Editor and OS Generated Files
+# -------------------------------------------------------------------------
+# VSCode settings
+.vscode/
+
+# MacOS files
+.DS_Store
+
+# Windows files
+Thumbs.db
