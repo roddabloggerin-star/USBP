@@ -86,17 +86,30 @@ def create_post(title, content_html, is_draft=False):
         return None
 
 if __name__ == '__main__':
-    print("--- Starting Blogger Post Test ---")
+    print("--- Starting Blogger Post Publish ---")
     
-    # Simple test with robust error checking
+    # 1. Define your post content
+    POST_TITLE = "My First Automated Post on Blogger!"
+    POST_CONTENT = """
+    <h1>Welcome to My Blog!</h1>
+    <p>This entire post was published automatically using my Python script and the Blogger API. 
+    This demonstrates the power of automation!</p>
+    <ul>
+        <li>No more manual copying.</li>
+        <li>Time-saving and efficient.</li>
+        <li>Ready for scheduled content.</li>
+    </ul>
+    """
+    
+    # 2. Call create_post with is_draft=False to publish immediately
     post = create_post(
-        title="Test from script (Draft)", 
-        content_html="<p>This post verifies that the script is working correctly and the token is valid.</p>", 
-        is_draft=True
+        title=POST_TITLE, 
+        content_html=POST_CONTENT, 
+        is_draft=False # <--- CHANGE THIS TO FALSE
     )
     
     if post:
-        print(f"✅ Successfully created post (Draft ID): {post.get('id')}")
+        print(f"✅ Successfully published NEW post (ID): {post.get('id')}")
         print(f"🔗 View URL: {post.get('url')}")
     else:
         print("❌ Post creation failed. Check console for errors.")
