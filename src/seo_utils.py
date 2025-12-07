@@ -105,9 +105,10 @@ def inject_seo_and_links(
     region_name = _zone_to_region_name(zone_name)
 
     # Approximate canonical URL from title + BLOG_BASE_URL
+    today = datetime.now()
     slug = _safe_slug(title)
     if BLOG_BASE_URL:
-        canonical_url = f"{BLOG_BASE_URL}/{slug}.html"
+        canonical_url = f"{BLOG_BASE_URL}/{today.year}/{today.month:02d}/{slug}.html"
     else:
         # Fallback placeholder (still better than homepage-only)
         canonical_url = f"https://example.com/{slug}.html"
