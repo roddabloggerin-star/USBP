@@ -1,3 +1,4 @@
+
 name: run_weather_bot
 
 on:
@@ -5,11 +6,13 @@ on:
   schedule:
     - cron: "0 */2 * * *"
   # Allow manual runs for testing
+
   workflow_dispatch:
 
 jobs:
   run_weather_bot:
     runs-on: ubuntu-latest
+
 
     env:
       # Secrets (all stored in GitHub repo settings → Secrets and variables → Actions)
@@ -58,3 +61,4 @@ jobs:
         with:
           name: generated-posts
           path: output_posts
+
