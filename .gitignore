@@ -53,3 +53,11 @@ htmlcov/
 
 # Windows files
 Thumbs.db
+
+
+client_secret.json
+token.json
+client_secrets.b64
+token.b64
+output_posts/
+*.pyc
