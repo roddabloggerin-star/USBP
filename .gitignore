@@ -53,3 +53,6 @@ htmlcov/
 
 # Windows files
 Thumbs.db
+
+client_secrets
+token.base64
