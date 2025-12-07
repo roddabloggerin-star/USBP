@@ -1,4 +1,3 @@
-
 name: run_weather_bot
 
 on:
@@ -6,24 +5,23 @@ on:
   schedule:
     - cron: "0 */2 * * *"
   # Allow manual runs for testing
-
   workflow_dispatch:
 
 jobs:
   run_weather_bot:
     runs-on: ubuntu-latest
 
-
     env:
       # Secrets (all stored in GitHub repo settings → Secrets and variables → Actions)
       NWS_USER_AGENT: ${{ secrets.NWS_USER_AGENT }}
-      BLOG_ID: ${{ secrets.BLOG_ID }}                # required only when PUBLISH=true
+      BLOG_ID: ${{ secrets.BLOG_ID }}               # required only when PUBLISH=true
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       BLOGGER_API_KEY: ${{ secrets.BLOGGER_API_KEY }} # if you still use it in api_client
       BLOG_BASE_URL: ${{ secrets.BLOG_BASE_URL }}     # e.g. https://usa-weather-updates.blogspot.com
 
       # File paths used by the code
       CLIENT_SECRETS_FILE: client_secrets.json
+      STATE_FILE: last_posted_zone.txt # <-- I added this for explicit clarity, though not strictly required
 
       # MASTER SWITCH: set this secret to "false" for testing; "true" for real publishing
       PUBLISH: ${{ secrets.PUBLISH }}
@@ -54,6 +52,18 @@ jobs:
         run: |
           python -m src.main
 
+      # 🌟 CRITICAL FIX: Commit the state file back to the repository
+      - name: Commit and Push State File
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          # This specifies the file updated by your Python script (main.py)
+          file_pattern: 'last_posted_zone.txt'
+          commit_message: '🤖 BOT: Update zone rotation state after successful post.'
+          skip_dirty_check: true # Allows the action to commit even if only this file changed
+          # Ensure the state file is only committed if the bot run was successful
+          # We use 'success()' to skip this step if the previous step failed, 
+          # but the `main.py` handles the state update only on successful post anyway.
+
       # Optional: upload generated HTML posts & index as workflow artifacts
       - name: Upload generated posts as artifact
         if: always()
@@ -61,4 +71,3 @@ jobs:
         with:
           name: generated-posts
           path: output_posts
-
