@@ -98,7 +98,7 @@ if __name__ == '__main__':
     post = create_post(
         title="Test from script (Draft)", 
         content_html="<p>This is a test post created using the revised Python script.</p>", 
-        is_draft=True
+        is_draft=false
     )
     
     print(f"Successfully created post (Draft): {post.get('id')}")
