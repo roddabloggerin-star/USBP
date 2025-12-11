@@ -11,14 +11,14 @@ import time
 MODEL_NAME = "gemini-2.5-flash"
 
 # Timeout constant (you can wire this into your HTTP stack if needed)
-API_TIMEOUT_SECONDS = 480
+API_TIMEOUT_SECONDS = 120
 
 # Initialize the Gemini client here.
 client = genai.Client()
 
 # --- Constants for token control / compaction ---
 MAX_CITIES_PER_ZONE = 15           # Hard cap on how many cities per zone we send to Gemini
-MAX_ALERTS_PER_CITY = 10            # Max alerts to include per city
+MAX_ALERTS_PER_CITY = 2            # Max alerts to include per city
 KEY_HOURLY_INDICES = [0, 12]       # Representative hourly points (~now and ~12h later)
 
 # Markers used inside model output instead of full HTML
