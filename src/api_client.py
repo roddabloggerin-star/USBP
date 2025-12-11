@@ -259,10 +259,25 @@ class NOAAApiClient:
             print(f"Geocoding failed for '{location}': {e}")
             return None
 
-    def fetch_weather_for_location(self, location: str) -> dict[str, dict]:
-    # For broad national requests, fallback to a central lat/lon
-    fallback_national = ["united states", "usa", "us national", "national forecast"]
-    if location.strip().lower() in fallback_national:
+    def fetch_weather_for_location(self, location: str) -> dict[str, dict]:"""
+    Given a location search string (e.g. "New York, NY"),
+    this method returns a dict with a single key
+    referring to the location and the NWS forecast data.
+
+    For broad national requests like "United States" or "USA",
+    use a fixed lat/lon to avoid geocoding errors.
+    """
+    # Recognize common broad national terms
+    fallback_national = [
+        "united states",
+        "usa",
+        "us national",
+        "national forecast",
+        "united states national forecast",
+    ]
+
+    loc_lower = location.strip().lower()
+    if loc_lower in fallback_national:
         # Geographic center of the contiguous United States
         lat, lon = (39.8283, -98.5795)
     else:
