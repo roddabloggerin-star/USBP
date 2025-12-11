@@ -3,3 +3,9 @@ requests
 python-dotenv
 google-auth
 google-auth-oauthlib
+
+rich
+matplotlib
+pandas
+numpy
+python-dateutil
