@@ -59,7 +59,7 @@ jobs:
           # This specifies the file updated by your Python script (main.py)
           file_pattern: 'last_posted_zone.txt'
           commit_message: '🤖 BOT: Update zone rotation state after successful post.'
-          skip_dirty_check: true # Allows the action to commit even if only this file changed
+        continue-on-error: true # Allows the action to commit even if only this file changed
           # Ensure the state file is only committed if the bot run was successful
           # We use 'success()' to skip this step if the previous step failed, 
           # but the `main.py` handles the state update only on successful post anyway.

@@ -260,37 +260,28 @@ class NOAAApiClient:
             return None
 
     def fetch_weather_for_location(self, location: str) -> dict[str, dict]:
-        """
-        Given a location search string (e.g. "New York, NY"),
-        this method returns a dict with a single key
-        referring to the location and the NWS forecast data.
-
-        Structure returned:
-        {
-            "Location Name": {
-                "forecast_hourly": { "periods": [...] },
-                "current_conditions": {},
-                "alerts": []
-            }
-        }
-        """
+    # For broad national requests, fallback to a central lat/lon
+    fallback_national = ["united states", "usa", "us national", "national forecast"]
+    if location.strip().lower() in fallback_national:
+        # Geographic center of the contiguous United States
+        lat, lon = (39.8283, -98.5795)
+    else:
         geocoded = self._geocode_location(location)
         if not geocoded:
             print(f"Could not geocode location: {location}")
             return {}
-
         lat, lon = geocoded
-        latlon_str = f"{lat},{lon}"
 
-        # Fetch NWS hourly forecast
-        hourly_props = get_nws_forecast(latlon_str, self.user_agent)
+    latlon_str = f"{lat},{lon}"
 
-        # return in the expected wrapper
-        result = {
-            location: {
-                "forecast_hourly": hourly_props or {},
-                "current_conditions": {},
-                "alerts": []
-            }
+    # Fetch NWS hourly forecast
+    hourly_props = get_nws_forecast(latlon_str, self.user_agent)
+
+    result = {
+        location: {
+            "forecast_hourly": hourly_props or {},
+            "current_conditions": {},
+            "alerts": []
         }
-        return result
+    }
+    return result
