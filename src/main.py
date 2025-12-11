@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from rich.logging import RichHandler
 
 from src.api_client import NOAAApiClient
+from src.image_utils import build_placeholder_image_tag
 from src.chart_utils import build_inline_charts_html
 from src.content_generator import generate_blog_content
 from src.post_storage import save_post_locally_and_publish
