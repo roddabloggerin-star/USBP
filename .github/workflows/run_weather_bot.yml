@@ -21,7 +21,7 @@ jobs:
 
       # File paths used by the code
       CLIENT_SECRETS_FILE: client_secrets.json
-      STATE_FILE: last_posted_zone.txt # <-- I added this for explicit clarity, though not strictly required
+      STATE_FILE: last_posted_zone.txt
 
       # MASTER SWITCH: set this secret to "false" for testing; "true" for real publishing
       PUBLISH: ${{ secrets.PUBLISH }}
@@ -35,9 +35,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 🌟 CHANGE 1: Explicitly install ALL required dependencies, including aiohttp
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          # The new main.py uses aiohttp for high-performance concurrent API calls.
+          # We ensure all necessary libraries are installed here for a robust environment.
+          pip install google-genai python-dotenv google-auth google-auth-oauthlib google-api-python-client requests aiohttp
 
       - name: Create OAuth files from secrets
         run: |
@@ -48,21 +51,21 @@ jobs:
           echo '${{ secrets.TOKEN_JSON }}' > token.json
           echo "OAuth files created successfully."
 
+      # 🌟 CHANGE 2: Updated the run command to a more robust script execution format
       - name: Run Weather Blog Bot
         run: |
-          python -m src.main
+          # Assuming the script is located at src/main.py based on your previous command.
+          # We use direct path execution for better script portability and clarity.
+          python src/main.py
 
-      # 🌟 CRITICAL FIX: Commit the state file back to the repository
+      # 🌟 CRITICAL FOR ROTATION: Commit the state file back to the repository
       - name: Commit and Push State File
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           # This specifies the file updated by your Python script (main.py)
           file_pattern: 'last_posted_zone.txt'
           commit_message: '🤖 BOT: Update zone rotation state after successful post.'
-          skip_dirty_check: true # Allows the action to commit even if only this file changed
-          # Ensure the state file is only committed if the bot run was successful
-          # We use 'success()' to skip this step if the previous step failed, 
-          # but the `main.py` handles the state update only on successful post anyway.
+          skip_dirty_check: true
 
       # Optional: upload generated HTML posts & index as workflow artifacts
       - name: Upload generated posts as artifact
