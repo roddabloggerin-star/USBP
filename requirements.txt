@@ -1,5 +1,7 @@
 google-genai
-requests
 python-dotenv
 google-auth
 google-auth-oauthlib
+google-api-python-client
+requests
+aiohttp
