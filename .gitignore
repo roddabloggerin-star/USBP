@@ -1,58 +1,49 @@
-# -------------------------------------------------------------------------
-# Environment and Secrets Files (CRITICAL: DO NOT COMMIT)
-# -------------------------------------------------------------------------
-# Stores environment variables (API keys, etc.) used for local development
-.env
-
-# Blogger OAuth 2.0 Credentials (contains refresh token)
-# This file is successfully generated locally and should be kept secret.
-token.json
-client_secrets.json
-
-# Temporary file for old/local Service Account key (based on main.py snippet)
-service_account_key.json
-
-# -------------------------------------------------------------------------
-# Python Artifacts and Local State
-# -------------------------------------------------------------------------
-# Python object cache files
+# -------------------------------------
+# Python-specific files
+# -------------------------------------
+# Byte-compiled Python files
 __pycache__/
 *.pyc
+*.pyd
+*.pyo
 
 # Virtual environment directories
-venv/
 .venv/
+venv/
+env/
+/bin/
 
-# Build/distribution files
-*.egg-info/
-dist/
-build/
-
-# Python test and documentation cache
+# Test/Coverage files
 .pytest_cache/
-htmlcov/
+.coverage
 
-# The state file used for zone rotation (updated every run)
-
-
-# -------------------------------------------------------------------------
-# Media Files (Optional: If the image is large or changes frequently)
-# -------------------------------------------------------------------------
-# The local image file that is base64 encoded by the script
-# UNCOMMENT this line if you do NOT want to commit the image.png file.
-# image.png
-
-# -------------------------------------------------------------------------
-# Editor and OS Generated Files
-# -------------------------------------------------------------------------
-# VSCode settings
+# Editor/IDE files
 .vscode/
+.idea/
+*.swp
+*~
 
-# MacOS files
-.DS_Store
+# -------------------------------------
+# Generated/Temporary Files (Project Output)
+# -------------------------------------
+# Output directory created by post_storage.py
+/output_posts/
 
-# Windows files
-Thumbs.db
+# -------------------------------------
+# Authentication and State (CRITICAL to ignore)
+# -------------------------------------
+# ⚠️ WARNING: These files contain sensitive Blogger/Google OAuth secrets.
+# They are safely generated on GitHub Actions from secrets, but must be ignored locally.
+client_secrets.json
+token.json
+client_secret.json # Just in case of different naming
 
-client_secrets
-token.base64
+# Local environment variables file (contains API keys)
+.env
+
+# -------------------------------------
+# State Files to be EXPLICITLY TRACKED
+# -------------------------------------
+# NOTE: The last_posted_zone.txt file is managed by the bot and committed
+# by GitHub Actions to maintain state. It must *NOT* be ignored.
+# last_posted_zone.txt
