@@ -11,9 +11,9 @@ import json
 import re
 import requests
 import base64
-import random
-import asyncio # <-- NEW: For concurrent NWS API calls
-import aiohttp # <-- NEW: For high-performance HTTP requests
+import random # <-- Used for backoff jitter
+import asyncio # <-- For concurrent NWS API calls
+import aiohttp # <-- For high-performance HTTP requests
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -24,7 +24,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from google.genai import errors
+from google.genai import errors # <-- Used to catch API errors for retrying
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -716,9 +716,76 @@ BLOG_POST_SCHEMA = types.Schema(
     required=["title", "meta_description", "content_html"]
 )
 
-# --- Rate Limit / Retry Config ---
-MAX_RETRIES = 3
-BASE_DELAY = 5.0 # seconds
+# --- Rate Limit / Retry Config (UPDATED FOR RESILIENCE) ---
+MAX_RETRIES = 5 # Increased retries for better resilience
+RETRY_DELAY_SECONDS = 5 # Starting delay for exponential backoff
+
+
+# --- NEW RETRY UTILITY FOR GEMINI API ---
+def call_gemini_api_with_retry(
+    client: genai.Client,
+    model: str,
+    system_instruction: str,
+    user_prompt: str,
+    response_mime_type: str,
+    response_schema: types.Schema,
+    temperature: float
+) -> Optional[str]:
+    """
+    Calls the Gemini API with a retry mechanism for transient errors (like 503 UNAVAILABLE or 429).
+    Uses exponential backoff with jitter.
+    """
+    for attempt in range(MAX_RETRIES):
+        try:
+            print(f"  > Attempting content generation (Attempt {attempt + 1}/{MAX_RETRIES})...")
+
+            # The actual Gemini API call
+            response = client.models.generate_content(
+                model=model,
+                contents=[user_prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type=response_mime_type,
+                    response_schema=response_schema,
+                    temperature=temperature,
+                )
+            )
+
+            # Check if the response is valid (no failure reason)
+            if response.candidates and response.candidates[0].finish_reason.name not in ('STOP', 'MAX_TOKENS'):
+                 # Raise an error to trigger a retry for safety reasons if content was not fully generated
+                raise Exception(f"Model finished with failure reason: {response.candidates[0].finish_reason.name}. Trying again.")
+
+            return response.text.strip()
+
+        # Catch API-specific errors, which include 503 (server error) and 429 (rate limit)
+        except errors.APIError as e:
+            error_code = getattr(e, 'code', 'Unknown')
+            # Check for retry conditions: not the final attempt AND a retryable server error/rate limit
+            is_retryable_error = (error_code == 503 or error_code == 429 or "UNAVAILABLE" in str(e))
+
+            if attempt < MAX_RETRIES - 1 and is_retryable_error:
+                # Calculate exponential backoff with jitter (a small random component)
+                delay = RETRY_DELAY_SECONDS * (2 ** attempt) + random.uniform(0, 1)
+                print(f"  > Transient API Error ({error_code}): {e.__class__.__name__}. Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
+            else:
+                # Re-raise the error if it's the last attempt or a non-retryable/unexpected error
+                # We raise here, and the calling function (generate_content) will catch it and log the final failure.
+                raise
+
+        except Exception as e:
+            # Catch other potential errors like network issues or the finish_reason error raised above
+            if attempt < MAX_RETRIES - 1:
+                delay = RETRY_DELAY_SECONDS * (2 ** attempt) + random.uniform(0, 1)
+                print(f"  > General Error: {e.__class__.__name__}. Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
+            else:
+                # Re-raise for the calling function to handle the final failure
+                raise
+
+    # Fallback return (should only be reached if an exception was caught and handled in a way that prevents re-raising)
+    return None
 
 
 def generate_content(
@@ -729,7 +796,7 @@ def generate_content(
 ) -> Optional[Dict[str, Any]]:
     """
     Generates the final blog post content, title, and meta description
-    from the NWS data using the Gemini API.
+    from the NWS data using the Gemini API, leveraging the retry utility.
     """
     if not client:
         print("FATAL: Gemini client not initialized due to missing API key.")
@@ -788,52 +855,48 @@ def generate_content(
 
     user_prompt = f"Generate a blog post based on the following NWS data for the '{zone_name}':\n\n{data_json}"
 
-    # 3. Call the Gemini API with Retries
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=[user_prompt],
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json",
-                    response_schema=BLOG_POST_SCHEMA,
-                    temperature=0.6,
-                ),
-            )
-            result = json.loads(response.text)
+    # 3. Call the Gemini API with Retries (using the new utility)
+    try:
+        response_text = call_gemini_api_with_retry(
+            client=client,
+            model=MODEL_NAME,
+            system_instruction=system_instruction,
+            user_prompt=user_prompt,
+            response_mime_type="application/json",
+            response_schema=BLOG_POST_SCHEMA,
+            temperature=0.6,
+        )
+    except Exception as e:
+        # This catches the final re-raised exception from call_gemini_api_with_retry
+        print(f"Unexpected error during content generation: {e.__class__.__name__}. Details: {e}")
+        return None
 
-            # Inject the real image tag and disclaimer HTML where the markers are
-            content = result.get("content_html", "")
-            if content:
-                content = content.replace(IMAGE_MARKER, image_tag)
-                content = content.replace(DISCLAIMER_MARKER, disclaimer_html)
-                result["content_html"] = content
+    if not response_text:
+        print("FAILURE: Content generation failed. No response text received after retries.")
+        return None
 
-            return result
+    # 4. Process the successful response text
+    try:
+        result = json.loads(response_text)
 
-        except errors.ClientError as e:
-            if e.code == 429 and attempt < MAX_RETRIES - 1:
-                delay = BASE_DELAY * (2 ** attempt)
-                print(f"Content generation rate-limited (429). Retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}).")
-                time.sleep(delay)
-                continue
-            print(f"FATAL: Gemini API Client Error (code={e.code}) on single-call generation.")
-            print(f"Details: {e}")
-            return None
+        # Inject the real image tag and disclaimer HTML where the markers are
+        content = result.get("content_html", "")
+        if content:
+            content = content.replace(IMAGE_MARKER, image_tag)
+            content = content.replace(DISCLAIMER_MARKER, disclaimer_html)
+            result["content_html"] = content
 
-        except json.JSONDecodeError as e:
-            print("FATAL: The model returned invalid JSON in the content generation step.")
-            # print(f"Raw response text: {response.text[:200]}") # Uncomment for debugging
-            print(f"Details: {e}")
-            return None
+        return result
 
-        except Exception as e:
-            print(f"Unexpected error during content generation: {e}")
-            return None
+    except json.JSONDecodeError as e:
+        print("FATAL: The model returned invalid JSON in the content generation step.")
+        # print(f"Raw response text: {response_text[:200]}") # Uncomment for debugging
+        print(f"Details: {e}")
+        return None
 
-    # If the loop finishes without success
-    return None
+    except Exception as e:
+        print(f"Unexpected error during content processing/injection: {e}")
+        return None
 
 
 # ==============================================================================
