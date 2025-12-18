@@ -107,7 +107,7 @@ async def fetch_json(session: aiohttp.ClientSession, url: str) -> Dict[str, Any]
         r.raise_for_status()
         return await r.json()
 
-async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[str, Any]:
+    async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[str, Any] | None:
     gid, x, y = c["grid_id"], c["grid_x"], c["grid_y"]
     base = f"https://api.weather.gov/gridpoints/{gid}/{x},{y}"
 
@@ -115,16 +115,32 @@ async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[
         data = await fetch_json(session, f"{base}/forecast/hourly")
         periods = data["properties"]["periods"][:12]
         source = "hourly"
-    except aiohttp.ClientResponseError:
-        data = await fetch_json(session, f"{base}/forecast")
-        periods = data["properties"]["periods"][:12]
-        source = "daily"
+
+    except aiohttp.ClientResponseError as e:
+        if e.status != 404:
+            raise
+
+        try:
+            data = await fetch_json(session, f"{base}/forecast")
+            periods = data["properties"]["periods"][:12]
+            source = "daily"
+
+        except aiohttp.ClientResponseError as e2:
+            if e2.status != 404:
+                raise
+
+            log.warning(
+                "Skipping city %s — no forecast endpoints available (%s %s,%s)",
+                c["city"], gid, x, y
+            )
+            return None
 
     return {
         "city": c["city"],
         "forecast_source": source,
         "periods": periods,
     }
+
 
 async def fetch_zone(zone: str, cities: List[Dict[str, Any]]) -> Dict[str, Any]:
     async with aiohttp.ClientSession() as session:
