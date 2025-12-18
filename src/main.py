@@ -144,7 +144,9 @@ async def fetch_json(session: aiohttp.ClientSession, url: str) -> Dict[str, Any]
 
 async def fetch_zone(zone: str, cities: List[Dict[str, Any]]) -> Dict[str, Any]:
     async with aiohttp.ClientSession() as session:
-        results = await asyncio.gather(*(fetch_city(session, c) for c in cities))
+        raw = await asyncio.gather(*(fetch_city(session, c) for c in cities))
+    results = [r for r in raw if r is not None]
+
     return {"zone": zone, "cities": results}
 
 # ============================================================
