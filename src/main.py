@@ -191,9 +191,18 @@ def save_post(post: Dict[str, str], zone: str):
 def next_zone() -> str:
     if not STATE_FILE.exists():
         return ZONE_ROTATION[0]
+
     last = STATE_FILE.read_text().strip()
+
+    if not last or last not in ZONE_ROTATION:
+        log.warning(
+            "Invalid or empty zone state (%r), resetting rotation", last
+        )
+        return ZONE_ROTATION[0]
+
     i = ZONE_ROTATION.index(last)
     return ZONE_ROTATION[(i + 1) % len(ZONE_ROTATION)]
+
 
 def save_state(zone: str):
     STATE_FILE.write_text(zone)
