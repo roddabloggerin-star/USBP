@@ -20,10 +20,14 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-# --- NEW IMPORTS FOR BLOGGER ---
+# --- UPDATED IMPORTS FOR BLOGGER AUTH ---
 from googleapiclient.discovery import build
 from googleapiclient.http import HttpError 
-# -------------------------------
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+import pickle
+# ----------------------------------------
 
 # ============================================================
 # Logging
@@ -43,9 +47,9 @@ def env(name: str, default=None, required=False):
     return v
 
 GEMINI_API_KEY = env("GEMINI_API_KEY", required=True)
-# --- ADDED BLOGGER API KEY ---
-BLOGGER_API_KEY = env("BLOGGER_API_KEY", required=True)
-# -----------------------------
+# --- REMOVED BLOGGER_API_KEY ---
+# BLOGGER_API_KEY is no longer used for OAuth write access
+# -------------------------------
 BLOG_BASE_URL = env("BLOG_BASE_URL", required=True)
 BLOG_ID = env("BLOG_ID", required=True)
 NWS_USER_AGENT = env("NWS_USER_AGENT", required=True)
@@ -53,6 +57,11 @@ PUBLISH = env("PUBLISH", "false").lower() == "true"
 
 OUTPUT_DIR = Path("output_posts")
 STATE_FILE = Path(env("STATE_FILE", "last_posted_zone.txt"))
+
+# --- NEW BLOGGER AUTH FILE PATHS ---
+TOKEN_FILE = Path(env("TOKEN_FILE", "token.json"))
+CLIENT_SECRETS_FILE = Path(env("CLIENT_SECRETS_FILE", "client_secrets.json"))
+# -----------------------------------
 
 # ============================================================
 # Gemini
@@ -176,7 +185,6 @@ async def fetch_json(session: aiohttp.ClientSession, url: str) -> Dict[str, Any]
         r.raise_for_status()
         return await r.json()
 
-# --- INDENTATION ERROR FIX APPLIED HERE ---
 async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[str, Any] | None:
     gid, x, y = c["grid_id"], c["grid_x"], c["grid_y"]
     base = f"https://api.weather.gov/gridpoints/{gid}/{x},{y}"
@@ -210,7 +218,6 @@ async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[
         "forecast_source": source,
         "periods": periods,
     }
-# ----------------------------------------
 
 
 async def fetch_zone(zone: str, cities: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -275,15 +282,58 @@ def save_post(post: Dict[str, str], zone: str):
     log.info("Saved %s", fname)
 
 # ============================================================
-# Blogger Publishing
+# Blogger Authentication & Publishing (UPDATED)
 # ============================================================
-def publish_post(post: Dict[str, str], blog_id: str, api_key: str):
+BLOGGER_SCOPE = ["https://www.googleapis.com/auth/blogger"]
+
+
+def get_authenticated_service():
+    """
+    Handles the OAuth 2.0 flow. 
+    Checks for token.json, refreshes if necessary, or runs interactive auth.
+    """
+    creds = None
+    
+    # 1. Load credentials from stored token file if it exists
+    if TOKEN_FILE.exists():
+        try:
+            # We use pickle to save/load the Credentials object securely
+            with open(TOKEN_FILE, 'rb') as token:
+                creds = pickle.load(token)
+        except Exception as e:
+            log.warning("Could not load stored credentials: %s. Re-authenticating.", e)
+
+    # 2. If no valid credentials, or they are expired, refresh or re-authenticate
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            # Refresh token automatically if possible
+            log.info("Refreshing Blogger access token...")
+            creds.refresh(Request())
+        else:
+            # Interactive authentication (MUST be run locally once)
+            log.warning("Starting interactive OAuth 2.0 flow. Run this script locally ONCE.")
+            
+            flow = InstalledAppFlow.from_client_secrets_file(
+                CLIENT_SECRETS_FILE, BLOGGER_SCOPE
+            )
+            # Port 0 means the system picks a free port for the local server
+            creds = flow.run_local_server(port=0)
+
+        # 3. Save the new/refreshed credentials for the next run
+        with open(TOKEN_FILE, 'wb') as token:
+            pickle.dump(creds, token)
+            log.info("Credentials saved to %s", TOKEN_FILE)
+
+    # 4. Build the authorized service. Note: 'credentials=creds' replaces 'developerKey=api_key'
+    return build('blogger', 'v3', credentials=creds)
+
+
+def publish_post(post: Dict[str, str], blog_id: str):
     log.info("Attempting to publish post to Blogger...")
     
     try:
-        # Initialize the Blogger service. Note: This simple API key approach 
-        # is for demonstration. Write access usually requires OAuth 2.0.
-        service = build('blogger', 'v3', developerKey=api_key)
+        # Get the service object, authorized via OAuth 2.0
+        service = get_authenticated_service()
         
         # Construct the post body
         body = {
@@ -301,9 +351,11 @@ def publish_post(post: Dict[str, str], blog_id: str, api_key: str):
         return result.get('url')
 
     except HttpError as e:
-        log.error("Failed to publish post to Blogger (HTTP Error: %s).", e.status_code)
+        log.error("Failed to publish post to Blogger (HTTP Error: %s).", e.resp.status)
         log.error("Response: %s", e.content.decode())
-        log.error("Check your BLOG_ID, API_KEY, and ensure proper OAuth 2.0 credentials are used for write access.")
+        log.error("Check: Is your 'token.json' file valid, and is the linked Google Account an author/admin on Blog ID: %s?", blog_id)
+        if e.resp.status in [401, 403]:
+             log.error("HINT: If running on GitHub Actions, ensure 'token.json' is correctly created from your GitHub Secret.")
     except Exception as e:
         log.error("An unexpected error occurred during publishing: %s", e)
 
@@ -341,12 +393,13 @@ def main():
     save_post(post, zone)
     save_state(zone)
     
-    # --- NEW PUBLISHING LOGIC ---
+    # --- UPDATED PUBLISHING LOGIC ---
     if PUBLISH:
-        publish_post(post, BLOG_ID, BLOGGER_API_KEY)
+        # The API key argument is removed, as authentication is handled internally by get_authenticated_service()
+        publish_post(post, BLOG_ID)
     else:
         log.info("PUBLISH is set to false. Skipping Blogger API post.")
-    # --- END NEW LOGIC ---
+    # --- END UPDATED LOGIC ---
 
     log.info("Completed zone: %s", zone)
 
