@@ -47,9 +47,9 @@ def env(name: str, default=None, required=False):
     return v
 
 GEMINI_API_KEY = env("GEMINI_API_KEY", required=True)
-# --- REMOVED BLOGGER_API_KEY ---
-# BLOGGER_API_KEY is no longer used for OAuth write access
-# -------------------------------
+# --- REMOVED BLOGGER_API_KEY (OAuth handles auth) ---
+# BLOGGER_API_KEY is no longer used for write access
+# ----------------------------------------------------
 BLOG_BASE_URL = env("BLOG_BASE_URL", required=True)
 BLOG_ID = env("BLOG_ID", required=True)
 NWS_USER_AGENT = env("NWS_USER_AGENT", required=True)
@@ -64,7 +64,7 @@ CLIENT_SECRETS_FILE = Path(env("CLIENT_SECRETS_FILE", "client_secrets.json"))
 # -----------------------------------
 
 # ============================================================
-# Gemini
+# Gemini (UNCHANGED)
 # ============================================================
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -81,7 +81,7 @@ SCHEMA = types.Schema(
 )
 
 # ============================================================
-# Zones (FULL LIST – UNCHANGED)
+# Zones (UNCHANGED)
 # ==========================================================================================
 NWS_ZONES = {
     "Eastern Zone": {
@@ -169,7 +169,7 @@ NWS_ZONES = {
 ZONE_ROTATION = list(NWS_ZONES.keys())
 
 # ============================================================
-# NWS Fetching (ASYNC + FALLBACK)
+# NWS Fetching (ASYNC + FALLBACK - UNCHANGED)
 # ============================================================
 HEADERS = {
     "User-Agent": NWS_USER_AGENT,
@@ -228,7 +228,7 @@ async def fetch_zone(zone: str, cities: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"zone": zone, "cities": results}
 
 # ============================================================
-# Gemini Content
+# Gemini Content (UNCHANGED)
 # ============================================================
 def generate_post(zone: str, nws_data: Dict[str, Any]) -> Dict[str, str]:
     prompt = f"""
@@ -258,7 +258,7 @@ Rules:
     return json.loads(r.text)
 
 # ============================================================
-# Storage
+# Storage (UNCHANGED)
 # ============================================================
 def save_post(post: Dict[str, str], zone: str):
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -301,6 +301,7 @@ def get_authenticated_service():
             with open(TOKEN_FILE, 'rb') as token:
                 creds = pickle.load(token)
         except Exception as e:
+            # THIS IS THE ERROR YOU ARE CURRENTLY SEEING!
             log.warning("Could not load stored credentials: %s. Re-authenticating.", e)
 
     # 2. If no valid credentials, or they are expired, refresh or re-authenticate
@@ -313,6 +314,7 @@ def get_authenticated_service():
             # Interactive authentication (MUST be run locally once)
             log.warning("Starting interactive OAuth 2.0 flow. Run this script locally ONCE.")
             
+            # This is the line that throws "could not locate runnable browser" in GitHub Actions
             flow = InstalledAppFlow.from_client_secrets_file(
                 CLIENT_SECRETS_FILE, BLOGGER_SCOPE
             )
@@ -360,7 +362,7 @@ def publish_post(post: Dict[str, str], blog_id: str):
         log.error("An unexpected error occurred during publishing: %s", e)
 
 # ============================================================
-# Rotation
+# Rotation (UNCHANGED)
 # ============================================================
 def next_zone() -> str:
     if not STATE_FILE.exists():
@@ -382,7 +384,7 @@ def save_state(zone: str):
     STATE_FILE.write_text(zone)
 
 # ============================================================
-# Main
+# Main (UPDATED CALL)
 # ============================================================
 def main():
     zone = next_zone()
@@ -395,7 +397,7 @@ def main():
     
     # --- UPDATED PUBLISHING LOGIC ---
     if PUBLISH:
-        # The API key argument is removed, as authentication is handled internally by get_authenticated_service()
+        # The API key argument is removed
         publish_post(post, BLOG_ID)
     else:
         log.info("PUBLISH is set to false. Skipping Blogger API post.")
