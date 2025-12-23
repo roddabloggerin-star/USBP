@@ -6,7 +6,7 @@ Python 3.12 / GitHub Actions Safe
 Features Included:
 - **Model:** Uses 'gemini-3-flash' for superior structured output.
 - **API Efficiency:** Implements the Mega-Prompt Strategy (1 Gemini request per run).
-- **Scaling:** City-Level Rotation (5 cities per run) via 'state.txt' file. <-- ADJUSTED
+- **Scaling:** City-Level Rotation (5 cities per run) via 'state.txt' file.
 - **Evergreen Content:** Blogger 'Search and Update' logic for all posts/pages.
 - **Topical Authority:** Programmatically generated City Hub Pages for internal linking.
 ============================================================
@@ -57,7 +57,10 @@ def env(name: str, default=None, required=False):
 # --- API Keys and Config ---
 GEMINI_API_KEY = env("GEMINI_API_KEY", required=True)
 BLOG_ID = env("BLOG_ID", required=True)
-CREDENTIALS_FILE = env("CREDENTIALS_FILE", "client_secret.json", required=True)
+
+# --- FIX: Changed env var key from CREDENTIALS_FILE to CLIENT_SECRETS_FILE
+# --- and updated default filename to the plural 'client_secrets.json' ---
+CLIENT_SECRETS_FILE = env("CLIENT_SECRETS_FILE", "client_secrets.json", required=True)
 TOKEN_FILE = Path(env("TOKEN_FILE", "token.pickle"))
 PUBLISH = env("PUBLISH", "False").lower() in ('true', '1', 't')
 STATE_FILE = Path(env("STATE_FILE", "state.txt")) # Path to store the index of the last processed city
@@ -153,7 +156,7 @@ NWS_ZONES = {
 # Gemini (MODEL AND SCHEMA)
 # ============================================================
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL = "gemini-2.5-flash" # Use the new Gemini 3 Flash model
+MODEL = "gemini-3-flash" # Use the new Gemini 3 Flash model
 
 # The individual post structure (now an object within the array)
 PROGRAMMATIC_POST_SCHEMA = types.Schema(
@@ -503,7 +506,8 @@ def get_authenticated_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+            # FIX applied here: CREDENTIALS_FILE variable name is now CLIENT_SECRETS_FILE
+            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
         
         with open(TOKEN_FILE, 'wb') as token:
