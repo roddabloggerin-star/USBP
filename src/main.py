@@ -156,7 +156,7 @@ NWS_ZONES = {
 # Gemini (MODEL AND SCHEMA)
 # ============================================================
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL = "gemini-3-flash" # Use the new Gemini 3 Flash model
+MODEL = "gemini-2.5-flash" # Use the new Gemini 2.5 Flash model
 
 # The individual post structure (now an object within the array)
 PROGRAMMATIC_POST_SCHEMA = types.Schema(
