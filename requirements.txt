@@ -1,7 +1,18 @@
-google-genai
+# Core libraries for environment and asynchronous networking
 python-dotenv
-google-auth
-google-auth-oauthlib
-google-api-python-client
-requests
 aiohttp
+
+# Google API/SDKs
+google-genai # For Gemini 2.5 Flash
+google-api-python-client # For Blogger API interaction (googleapiclient)
+google-auth-oauthlib # For OAuth flow and token management
+google-auth # A dependency for the above
+
+# Data Processing and Google Trends
+pandas # Required by pytrends
+pytrends # The Google Trends API client
+python-dateutil # For date manipulation, often used with pandas/pytrends
+
+# General
+# You may need to specify a version if you encounter conflicts, but the latest versions usually work:
+# requests
