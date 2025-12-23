@@ -26,7 +26,8 @@ from googleapiclient.http import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-import pickle
+# pickle is no longer needed
+# import pickle 
 # ----------------------------------------
 
 # ============================================================
@@ -47,9 +48,7 @@ def env(name: str, default=None, required=False):
     return v
 
 GEMINI_API_KEY = env("GEMINI_API_KEY", required=True)
-# --- REMOVED BLOGGER_API_KEY (OAuth handles auth) ---
 # BLOGGER_API_KEY is no longer used for write access
-# ----------------------------------------------------
 BLOG_BASE_URL = env("BLOG_BASE_URL", required=True)
 BLOG_ID = env("BLOG_ID", required=True)
 NWS_USER_AGENT = env("NWS_USER_AGENT", required=True)
@@ -282,7 +281,7 @@ def save_post(post: Dict[str, str], zone: str):
     log.info("Saved %s", fname)
 
 # ============================================================
-# Blogger Authentication & Publishing (UPDATED)
+# Blogger Authentication & Publishing (MODIFIED)
 # ============================================================
 BLOGGER_SCOPE = ["https://www.googleapis.com/auth/blogger"]
 
@@ -290,19 +289,22 @@ BLOGGER_SCOPE = ["https://www.googleapis.com/auth/blogger"]
 def get_authenticated_service():
     """
     Handles the OAuth 2.0 flow. 
-    Checks for token.json, refreshes if necessary, or runs interactive auth.
+    Prioritizes reading credentials from a standard JSON token file,
+    falling back to interactive flow if run locally and needed.
     """
     creds = None
     
-    # 1. Load credentials from stored token file if it exists
+    # 1. Try to load credentials from a standard JSON token file 
     if TOKEN_FILE.exists():
+        log.info("Attempting to load credentials from standard JSON file: %s", TOKEN_FILE)
         try:
-            # We use pickle to save/load the Credentials object securely
-            with open(TOKEN_FILE, 'rb') as token:
-                creds = pickle.load(token)
+            # Credentials.from_authorized_user_file reads plain JSON, NOT pickled object
+            creds = Credentials.from_authorized_user_file(
+                TOKEN_FILE, BLOGGER_SCOPE
+            )
         except Exception as e:
-            # THIS IS THE ERROR YOU ARE CURRENTLY SEEING!
-            log.warning("Could not load stored credentials: %s. Re-authenticating.", e)
+            # If the file exists but is corrupt or in the wrong format, log and proceed
+            log.warning("Could not load credentials from JSON file: %s. Proceeding to interactive flow (or refresh).", e)
 
     # 2. If no valid credentials, or they are expired, refresh or re-authenticate
     if not creds or not creds.valid:
@@ -314,19 +316,19 @@ def get_authenticated_service():
             # Interactive authentication (MUST be run locally once)
             log.warning("Starting interactive OAuth 2.0 flow. Run this script locally ONCE.")
             
-            # This is the line that throws "could not locate runnable browser" in GitHub Actions
+            # This line will fail in a headless environment
             flow = InstalledAppFlow.from_client_secrets_file(
                 CLIENT_SECRETS_FILE, BLOGGER_SCOPE
             )
             # Port 0 means the system picks a free port for the local server
             creds = flow.run_local_server(port=0)
 
-        # 3. Save the new/refreshed credentials for the next run
-        with open(TOKEN_FILE, 'wb') as token:
-            pickle.dump(creds, token)
-            log.info("Credentials saved to %s", TOKEN_FILE)
+        # 3. Save the new/refreshed credentials as standard JSON for the next run
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
+            log.info("Credentials saved as standard JSON to %s", TOKEN_FILE)
 
-    # 4. Build the authorized service. Note: 'credentials=creds' replaces 'developerKey=api_key'
+    # 4. Build the authorized service.
     return build('blogger', 'v3', credentials=creds)
 
 
