@@ -40,7 +40,7 @@ jobs:
         run: |
           # The new main.py uses aiohttp for high-performance concurrent API calls.
           # We ensure all necessary libraries are installed here for a robust environment.
-          pip install google-genai python-dotenv google-auth google-auth-oauthlib google-api-python-client requests aiohttp
+          pip install google-genai python-dotenv google-auth google-auth-oauthlib google-api-python-client requests aiohttp pandas pytrends python-dateutil
 
       - name: Create OAuth files from secrets
         run: |
