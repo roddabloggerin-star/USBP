@@ -62,7 +62,10 @@ CLIENT_SECRETS_FILE = Path(env("CLIENT_SECRETS_FILE", "client_secrets.json"))
 # ============================================================
 # Gemini
 # ============================================================
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    request_options={"timeout": 600.0}
+)
 
 MODEL = "gemini-2.5-flash"
 
