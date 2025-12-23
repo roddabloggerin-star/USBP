@@ -22,12 +22,10 @@ from google.genai import types
 
 # --- UPDATED IMPORTS FOR BLOGGER AUTH ---
 from googleapiclient.discovery import build
-from googleapiclient.http import HttpError 
+from googleapiclient.http import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-# pickle is no longer needed
-# import pickle 
 # ----------------------------------------
 
 # ============================================================
@@ -48,7 +46,6 @@ def env(name: str, default=None, required=False):
     return v
 
 GEMINI_API_KEY = env("GEMINI_API_KEY", required=True)
-# BLOGGER_API_KEY is no longer used for write access
 BLOG_BASE_URL = env("BLOG_BASE_URL", required=True)
 BLOG_ID = env("BLOG_ID", required=True)
 NWS_USER_AGENT = env("NWS_USER_AGENT", required=True)
@@ -63,7 +60,7 @@ CLIENT_SECRETS_FILE = Path(env("CLIENT_SECRETS_FILE", "client_secrets.json"))
 # -----------------------------------
 
 # ============================================================
-# Gemini (UNCHANGED)
+# Gemini
 # ============================================================
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -168,7 +165,7 @@ NWS_ZONES = {
 ZONE_ROTATION = list(NWS_ZONES.keys())
 
 # ============================================================
-# NWS Fetching (ASYNC + FALLBACK - UNCHANGED)
+# NWS Fetching (ASYNC + FALLBACK - MODIFIED)
 # ============================================================
 HEADERS = {
     "User-Agent": NWS_USER_AGENT,
@@ -186,10 +183,17 @@ async def fetch_json(session: aiohttp.ClientSession, url: str) -> Dict[str, Any]
 
 async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[str, Any] | None:
     gid, x, y = c["grid_id"], c["grid_x"], c["grid_y"]
-    base = f"https://api.weather.gov/gridpoints/{gid}/{x},{y}"
+    
+    # URL for the public web page forecast (The primary source link for the blog)
+    nws_web_url = f"https://forecast.weather.gov/MapClick.php?x={x}&y={y}&site={gid}"
+
+    # Base URL for the API
+    base_api_url = f"https://api.weather.gov/gridpoints/{gid}/{x},{y}"
 
     try:
-        data = await fetch_json(session, f"{base}/forecast/hourly")
+        # First attempt: hourly forecast API
+        api_url = f"{base_api_url}/forecast/hourly"
+        data = await fetch_json(session, api_url)
         periods = data["properties"]["periods"][:12]
         source = "hourly"
 
@@ -198,7 +202,9 @@ async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[
             raise
 
         try:
-            data = await fetch_json(session, f"{base}/forecast")
+            # Second attempt: daily forecast API
+            api_url = f"{base_api_url}/forecast"
+            data = await fetch_json(session, api_url)
             periods = data["properties"]["periods"][:12]
             source = "daily"
 
@@ -216,6 +222,8 @@ async def fetch_city(session: aiohttp.ClientSession, c: Dict[str, Any]) -> Dict[
         "city": c["city"],
         "forecast_source": source,
         "periods": periods,
+        "nws_url": nws_web_url,  # <-- ADDED NWS WEB LINK
+        "api_url": api_url,      # <-- ADDED API LINK
     }
 
 
@@ -227,21 +235,36 @@ async def fetch_zone(zone: str, cities: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"zone": zone, "cities": results}
 
 # ============================================================
-# Gemini Content (UNCHANGED)
+# Gemini Content (MODIFIED)
 # ============================================================
 def generate_post(zone: str, nws_data: Dict[str, Any]) -> Dict[str, str]:
     prompt = f"""
-Generate an SEO-optimized US weather blog post.
+***TASK: SEO-optimized, Comprehensive Weather Analysis Blog Post***
 
-ZONE: {zone}
+**GOAL:** Generate a blog post of at least **2000 words** that provides in-depth weather analysis and localized news for the {zone} region.
 
-DATA:
+**DATA SOURCE:**
 {json.dumps(nws_data, indent=2)}
 
-Rules:
-- Use <h2> per city
-- Mention alerts if present
-- Friendly, professional tone
+**STRUCTURE & REQUIREMENTS:**
+
+1.  **Content Length:** MUST exceed 2000 words. Achieve this by deeply analyzing the provided forecast data for each city, writing expanded sections, and fulfilling the news requirement below.
+2.  **Source Linking:** For *every* city analysis section, include a hyperlink to the original NWS source URL provided in the `nws_url` field of the data. The link must be embedded using standard HTML anchor tags (`<a href="URL">...</a>`).
+3.  **Section Breakdown:**
+    * **Introduction:** (150+ words) Overview of the {zone}'s current weather and major trends.
+    * **City Analysis (Main Section):** For *each* city in the DATA:
+        * Use `<h2>[City Name] In-Depth Forecast</h2>`.
+        * Provide a detailed, multi-paragraph analysis (300+ words per city) of the 12-period forecast, breaking down temperature trends, precipitation, wind, and comparing hourly vs. daily trends.
+        * **CRITICAL LINKING:** Include a reference link in a separate paragraph: e.g., `<p>For the most detailed, up-to-the-minute forecast, visit the official National Weather Service source: <a href="[Insert the 'nws_url' here]">NWS Forecast for [City Name]</a>.</p>`.
+    * **Regional Weather News/Impact:** (300+ words) Based on the data, invent and write 2-3 short, plausible "news" articles about a specific weather event (e.g., flash flood warning, heat advisory, road closures, or unusual cold) in a *nearby, non-listed* city within the zone. Use your general knowledge of the region to select a plausible nearby city for a localized news story. Title this section `<h2>Regional Weather News Desk</h2>`.
+    * **Conclusion:** (100+ words) Summary, safety reminders, and look-ahead.
+
+**OUTPUT FORMAT:**
+- Use standard, clean HTML markup (`<h1>`, `<h2>`, `<p>`, `<a>`).
+- Your entire response MUST be a single JSON object matching the SCHEMA below.
+- The `content_html` field must contain ALL content.
+
+**STRICT RULE:** Ensure the final `content_html` contains all the required source links and the total length is highly substantial (aim for 2000+ words).
 """
 
     r = client.models.generate_content(
@@ -250,7 +273,7 @@ Rules:
         config=types.GenerateContentConfig(
             response_schema=SCHEMA,
             response_mime_type="application/json",
-            temperature=0.5,
+            temperature=0.7, # Increased temperature for more creative/longer content
         ),
     )
 
@@ -281,7 +304,7 @@ def save_post(post: Dict[str, str], zone: str):
     log.info("Saved %s", fname)
 
 # ============================================================
-# Blogger Authentication & Publishing (MODIFIED)
+# Blogger Authentication & Publishing (UNCHANGED from previous step)
 # ============================================================
 BLOGGER_SCOPE = ["https://www.googleapis.com/auth/blogger"]
 
@@ -386,24 +409,27 @@ def save_state(zone: str):
     STATE_FILE.write_text(zone)
 
 # ============================================================
-# Main (UPDATED CALL)
+# Main (UNCHANGED)
 # ============================================================
 def main():
     zone = next_zone()
     log.info("Processing zone: %s", zone)
 
     nws = asyncio.run(fetch_zone(zone, NWS_ZONES[zone]["cities"]))
+    
+    # Check if we have any data before generating
+    if not nws["cities"]:
+        log.warning("No city data fetched for zone %s. Skipping post generation.", zone)
+        return
+
     post = generate_post(zone, nws)
     save_post(post, zone)
     save_state(zone)
     
-    # --- UPDATED PUBLISHING LOGIC ---
     if PUBLISH:
-        # The API key argument is removed
         publish_post(post, BLOG_ID)
     else:
         log.info("PUBLISH is set to false. Skipping Blogger API post.")
-    # --- END UPDATED LOGIC ---
 
     log.info("Completed zone: %s", zone)
 
