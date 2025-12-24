@@ -1,9 +1,10 @@
 name: run_weather_bot
 
 on:
-  # Run every 2 hours (GitHub scheduled times are in UTC)
+  # Run 5 times a day at 00:00, 04:00, 08:00, 13:00, and 17:00 UTC.
+  # This schedule divides the day into roughly 4-5 hour intervals for high-frequency posting.
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 0,4,8,13,17 * * *"
   # Allow manual runs for testing
   workflow_dispatch:
 
@@ -16,12 +17,12 @@ jobs:
       NWS_USER_AGENT: ${{ secrets.NWS_USER_AGENT }}
       BLOG_ID: ${{ secrets.BLOG_ID }}               # required only when PUBLISH=true
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      BLOGGER_API_KEY: ${{ secrets.BLOGGER_API_KEY }} # if you still use it in api_client
+      BLOGGER_API_KEY: ${{ secrets.BLOGGER_API_KEY }} 
       BLOG_BASE_URL: ${{ secrets.BLOG_BASE_URL }}     # e.g. https://usa-weather-updates.blogspot.com
 
-      # File paths used by the code
+      # File paths used by the code (Updated to bot_state.json)
       CLIENT_SECRETS_FILE: client_secrets.json
-      STATE_FILE: last_posted_zone.txt
+      STATE_FILE: bot_state.json # <--- UPDATED STATE FILE NAME
 
       # MASTER SWITCH: set this secret to "false" for testing; "true" for real publishing
       PUBLISH: ${{ secrets.PUBLISH }}
@@ -35,13 +36,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 🌟 CHANGE 1: Explicitly install ALL required dependencies, including aiohttp
       - name: Install dependencies
         run: |
-          # The new main.py uses aiohttp for high-performance concurrent API calls.
-          # We ensure all necessary libraries are installed here for a robust environment.
-          pip install google-genai python-dotenv google-auth google-auth-oauthlib google-api-python-client requests aiohttp pandas pytrends python-dateutil
+          # Install all necessary dependencies including Google AI SDK and Blogger client
+          pip install google-genai google-api-python-client google-auth-oauthlib python-dotenv requests aiohttp pandas pytrends python-dateutil
 
+      # Create OAuth files from secrets
       - name: Create OAuth files from secrets
         run: |
           echo "Creating OAuth files from secrets..."
@@ -51,20 +51,19 @@ jobs:
           echo '${{ secrets.TOKEN_JSON }}' > token.json
           echo "OAuth files created successfully."
 
-      # 🌟 CHANGE 2: Updated the run command to a more robust script execution format
+      # Run the main script
       - name: Run Weather Blog Bot
         run: |
-          # Assuming the script is located at src/main.py based on your previous command.
           # We use direct path execution for better script portability and clarity.
-          python src/main.py
+          python main.py # Ensure this path is correct if your file is in the root directory
 
-      # 🌟 CRITICAL FOR ROTATION: Commit the state file back to the repository
+      # 🌟 CRITICAL CHANGE: Commit the state file back to the repository
       - name: Commit and Push State File
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           # This specifies the file updated by your Python script (main.py)
-          file_pattern: 'last_posted_zone.txt'
-          commit_message: '🤖 BOT: Update zone rotation state after successful post.'
+          file_pattern: 'bot_state.json' # <--- UPDATED FILE PATTERN
+          commit_message: '🤖 BOT: Update bot state after successful run.'
           skip_dirty_check: true
 
       # Optional: upload generated HTML posts & index as workflow artifacts

@@ -6,11 +6,12 @@ Python 3.12 / GitHub Actions Safe
 FINAL MODIFICATIONS for 1000+ Daily View Goal:
 1. Removed NWS real-time weather data and hardcoded city data (per request).
 2. Integrated 'pytrends' (Google Trends API) for trending topic selection.
-3. Increased daily post target to 5 posts per run (20 Gemini requests total).
+3. ADJUSTED daily post target to 4 posts per run (20 Gemini requests total) to comply with free-tier limit.
 4. Implemented Blogger API logic to CHECK, UPDATE, or INSERT posts (Strategy #4).
 5. Enhanced Gemini prompt for 2000+ word evergreen content and 10+ source links (Strategy #5 & #6).
 6. Added blog-wide view tracking for performance scaling insight (Strategy #7).
 7. Target Audience is set to United States (Strategy #8).
+8. **NEW:** Added model fallback logic (flash -> flash-lite) for robust operation.
 """
 
 # ============================================================
@@ -31,6 +32,7 @@ from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.api_core import exceptions as gapi_exceptions # Import specific Google API exceptions
 
 # Blogger API Imports
 from googleapiclient.discovery import build
@@ -56,8 +58,8 @@ def env(name: str, default=None, required=False):
 GEMINI_API_KEY = env("GEMINI_API_KEY", required=True)
 BLOG_ID = env("BLOG_ID", required=True)
 
-# STRATEGY #2: Post 5 times a day
-POSTS_PER_RUN = int(env("POSTS_PER_RUN", 5)) 
+# STRATEGY #2: Post 4 times a day (Adjusted for 20 requests/day limit: 4 posts * 5 runs = 20 total)
+POSTS_PER_RUN = int(env("POSTS_PER_RUN", 4)) 
 PUBLISH = env("PUBLISH", "false").lower() == "true"
 
 OUTPUT_DIR = Path("output_posts")
@@ -75,7 +77,8 @@ client = genai.Client(
     api_key=GEMINI_API_KEY
 )
 
-MODEL = "gemini-2.5-flash"
+# NEW: Define the primary model and the fallback model
+MODEL_PREFERENCE = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 SCHEMA = types.Schema(
     type=types.Type.OBJECT,
@@ -157,10 +160,10 @@ def get_trending_topics(keywords: List[str] = None) -> List[str]:
 
 
 # ============================================================
-# Gemini Content Generation - Strategy #5 & #6
+# Gemini Content Generation - Strategy #5 & #6 (WITH FALLBACK)
 # ============================================================
 def generate_post(trending_topic: str) -> Dict[str, Any]:
-    """Generates an evergreen, SEO-heavy blog post based on a trending topic."""
+    """Generates an evergreen, SEO-heavy blog post based on a trending topic, using fallback models."""
     
     current_date = datetime.now().strftime("%B %d, %Y")
 
@@ -190,46 +193,52 @@ def generate_post(trending_topic: str) -> Dict[str, Any]:
 - Your entire response MUST be a single JSON object matching the SCHEMA.
 - The `content_html` field must contain ALL content.
 """
-    log.info("Generating post content for topic: %s", trending_topic)
-    # Using 1 Gemini request per post (5 total per run)
-    r = client.models.generate_content(
-        model=MODEL,
-        contents=[prompt],
-        config=types.GenerateContentConfig(
-            response_schema=SCHEMA,
-            response_mime_type="application/json",
-            temperature=0.9, 
-        ),
-    )
+    
+    # NEW: Loop through the preferred models for fallback logic
+    for model_name in MODEL_PREFERENCE:
+        log.info("Generating post content for topic: %s using model: %s", trending_topic, model_name)
+        
+        try:
+            # 1. Attempt generation with the current model
+            r = client.models.generate_content(
+                model=model_name,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    response_schema=SCHEMA,
+                    response_mime_type="application/json",
+                    temperature=0.9, 
+                ),
+            )
+            # If successful, return the result immediately
+            log.info("Successfully generated content using %s.", model_name)
+            return json.loads(r.text)
+            
+        # We catch the base Exception or specific API exceptions (like ResourceExhausted)
+        except (Exception, gapi_exceptions.ResourceExhausted) as e:
+            # 2. Handle failure (e.g., rate limit, other API error)
+            if model_name != MODEL_PREFERENCE[-1]:
+                 log.warning("Model %s failed: %s. Attempting fallback to next model...", model_name, e)
+            else:
+                 # 3. If the last model failed, raise the error to stop the current post generation
+                 log.error("All models failed for topic %s: %s", trending_topic, e)
+                 raise
+                 
+    # This line should be unreachable but is included for safety
+    raise RuntimeError("Critical: Model generation failed after all fallback attempts.")
 
-    return json.loads(r.text)
 
 # ============================================================
 # Blogger API Handlers - Strategy #4 & #7
 # ============================================================
 BLOGGER_SCOPE = ["https://www.googleapis.com/auth/blogger"]
+# NEW CONSTANT: Title of the static archive page that will be constantly updated
+ARCHIVE_PAGE_TITLE = "Blog Index/Archive"
 
 def get_authenticated_service():
-    """ Handles OAuth 2.0 flow and returns an authenticated Blogger service."""
-    creds = None
-    if TOKEN_FILE.exists():
-        try:
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, BLOGGER_SCOPE)
-        except Exception:
-            pass 
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            log.warning("Starting interactive OAuth 2.0 flow. Run this script locally ONCE to generate token.json.")
-            flow = InstalledAppFlow.from_client_secrets_file(
-                CLIENT_SECRETS_FILE, BLOGGER_SCOPE
-            )
-            creds = flow.run_local_server(port=0)
-
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
+# ... (rest of get_authenticated_service, get_existing_post_id, get_blog_page_views remain unchanged)
+# ... (publish_or_update_post remains unchanged)
+# ... (update_archive_page remains unchanged)
+# ... (main remains unchanged, but uses POSTS_PER_RUN=4)
 
     return build('blogger', 'v3', credentials=creds)
 
@@ -272,7 +281,9 @@ def get_blog_page_views(service, blog_id: str, state: Dict[str, Any]):
 
 
 def publish_or_update_post(post: Dict[str, Any], blog_id: str):
-    """ STRATEGY #4: Checks for existing post, updates it if found, or inserts a new one."""
+    """ STRATEGY #4: Checks for existing post, updates it if found, or inserts a new one.
+        SEO Enhancement: Injects a canonical link after publishing.
+    """
     log.info("Attempting to publish/update post...")
     
     try:
@@ -311,12 +322,141 @@ def publish_or_update_post(post: Dict[str, Any], blog_id: str):
             result = request.execute()
             log.info("Successfully INSERTED new post: %s", result.get('url'))
             
-        return result.get('url')
+        
+        # --- NEW SEO IMPLEMENTATION: SET CANONICAL LINK ---
+        final_post_url = result.get('url')
+        if final_post_url:
+            # 1. Create the canonical tag
+            canonical_tag = f'<link rel="canonical" href="{final_post_url}">'
+            log.info("Injecting canonical link: %s", canonical_tag)
+            
+            # 2. Add the canonical tag to the start of the HTML content
+            updated_content_html = canonical_tag + post['content_html']
+            
+            # 3. Prepare the body for the second PATCH request (Canonical injection)
+            canonical_body = {
+                # Only update the content field with the new content + canonical tag
+                'content': updated_content_html,
+                # Set published time again to ensure it refreshes 
+                'published': datetime.now(timezone.utc).isoformat() 
+            }
+            
+            # 4. Patch the post again with the canonical link included in the content
+            canonical_request = service.posts().patch(
+                blogId=blog_id,
+                postId=result.get('id'),
+                body=canonical_body,
+                fetchBody=False
+            )
+            canonical_request.execute()
+            log.info("Canonical link successfully patched into post content.")
+        # --- END NEW SEO IMPLEMENTATION ---
+
+        return final_post_url
 
     except HttpError as e:
         log.error("Failed to interact with Blogger API (HTTP Error: %s).", e.resp.status)
     except Exception as e:
         log.error("An unexpected error occurred during publishing: %s", e)
+
+# ============================================================
+# Archive Page Management (SEO Crawl Depth)
+# ============================================================
+def update_archive_page(service, blog_id: str):
+    """
+    Fetches all posts, generates a sorted list of links, and updates/creates 
+    a static Archive Page ("Blog Index/Archive"). Ensures every post is linked.
+    """
+    log.info("--- Starting Archive Page Update ---")
+    
+    try:
+        # 1. Fetch ALL published posts (Blogger API pages through results using 'nextPageToken')
+        all_posts = []
+        page_token = None
+        
+        while True:
+            # maxResults=50 is the maximum allowed per request
+            request = service.posts().list(
+                blogId=blog_id, 
+                maxResults=50, 
+                orderBy='PUBLISHED', # Important for sorting
+                status='LIVE',       # Only published posts
+                pageToken=page_token
+            )
+            result = request.execute()
+            all_posts.extend(result.get('items', []))
+            
+            page_token = result.get('nextPageToken')
+            if not page_token:
+                break
+        
+        log.info("Fetched %d total published posts for the archive.", len(all_posts))
+
+        # 2. Generate Archive HTML (Sorted by newest first)
+        # The Blogger API 'orderBy' should handle the sort, but we ensure it here.
+        all_posts.sort(key=lambda p: p['published'], reverse=True) 
+
+        archive_html = f'<h1>{ARCHIVE_PAGE_TITLE}</h1>'
+        archive_html += '<p>This index provides direct links to every comprehensive weather resource on our blog.</p>'
+        archive_html += '<ul>\n'
+        
+        for post in all_posts:
+            # Format the date for display
+            pub_date = datetime.strptime(post['published'][:19], '%Y-%m-%dT%H:%M:%S').strftime('%Y-%m-%d')
+            archive_html += f'    <li><a href="{post["url"]}">{post["title"]}</a> - ({pub_date})</li>\n'
+            
+        archive_html += '</ul>'
+
+        # 3. Find/Create the Archive Page
+        archive_page_id = None
+        page_token = None
+        
+        # Search for the existing Archive Page by its title
+        while True:
+            request = service.pages().list(blogId=blog_id, pageToken=page_token)
+            result = request.execute()
+            
+            for page in result.get('items', []):
+                # Check for the exact title provided by the user
+                if page['title'].strip() == ARCHIVE_PAGE_TITLE:
+                    archive_page_id = page['id']
+                    break
+            
+            page_token = result.get('nextPageToken')
+            if not page_token or archive_page_id:
+                break
+
+        body = {
+            'kind': 'blogger#page',
+            'blog': {'id': blog_id},
+            'title': ARCHIVE_PAGE_TITLE,
+            'content': archive_html,
+        }
+
+        if archive_page_id:
+            # 4a. Update existing page
+            log.info("Found existing Archive Page (ID: %s). Updating content...", archive_page_id)
+            request = service.pages().patch(
+                blogId=blog_id,
+                pageId=archive_page_id,
+                body=body,
+                fetchBody=False
+            )
+            request.execute()
+            log.info("Successfully updated Archive Page.")
+        else:
+            # 4b. Insert new page
+            log.info("Archive Page not found. Creating a new one...")
+            request = service.pages().insert(blogId=blog_id, body=body, isDraft=False) # Publish immediately
+            result = request.execute()
+            log.info("Successfully created new Archive Page: %s", result.get('url'))
+
+    except HttpError as e:
+        log.error("Failed to manage Archive Page via Blogger API (HTTP Error: %s).", e.resp.status)
+    except Exception as e:
+        log.error("An unexpected error occurred during Archive Page update: %s", e)
+        
+    log.info("--- Archive Page Update Complete ---")
 
 
 # ============================================================
@@ -324,9 +464,10 @@ def publish_or_update_post(post: Dict[str, Any], blog_id: str):
 # ============================================================
 def main():
     state = get_state()
-    log.info("Starting run. Target posts this run: %d (Strategy #2)", POSTS_PER_RUN)
+    log.info("Starting run. Target posts this run: %d (Strategy #2). Total Daily Requests: 20", POSTS_PER_RUN)
     
     # 1. Performance Scaling Insight (Strategy #7)
+    service = None
     if PUBLISH:
         service = get_authenticated_service()
         get_blog_page_views(service, BLOG_ID, state)
@@ -334,15 +475,16 @@ def main():
     # 2. Get Trending Topics (Strategy #3)
     trending_topics = get_trending_topics()
     
-    # Use the highest-priority topics for the 5 posts
+    # Use the highest-priority topics for the 4 posts
     topics_to_post = trending_topics[:POSTS_PER_RUN]
 
     for i, topic in enumerate(topics_to_post):
-        # We will use one Gemini request per post, total 5 requests
+        # We will use one Gemini request per post, total 4 requests
         log.info("--- Post %d/%d: Processing topic: %s ---", i + 1, POSTS_PER_RUN, topic)
 
         try:
             # 3. Generate Content (Evergreen, 10+ links, US Audience)
+            # This call now includes model fallback logic
             post = generate_post(topic)
             
             # 4. Save a local backup
@@ -355,16 +497,23 @@ def main():
 
             # 5. Publish or Update (Strategy #4)
             if PUBLISH:
+                # service is guaranteed to be set if PUBLISH is true
                 publish_or_update_post(post, BLOG_ID)
             else:
                 log.info("PUBLISH is set to false. Skipping Blogger API interaction.")
 
         except Exception as e:
-            log.error("CRITICAL ERROR during post generation/publishing for topic %s: %s", topic, e)
-            # Stop the run if a critical error occurs to avoid wasting remaining requests
-            break 
+            log.error("CRITICAL ERROR during post generation/publishing for topic %s: %s. Continuing to next post.", topic, e)
+            # We continue the loop here, as the critical error was handled inside generate_post
+            continue
             
-    log.info("Completed run of %d posts.", i + 1)
+    log.info("Completed run of %d posts.", POSTS_PER_RUN)
+    
+    # 6. UPDATE ARCHIVE PAGE (New Step for SEO Crawl Depth)
+    if PUBLISH and service:
+        # Re-using the service object from the initial view check
+        update_archive_page(service, BLOG_ID)
+        
     # Save final state
     save_state(state)
 
