@@ -11,7 +11,8 @@ FINAL MODIFICATIONS for 1000+ Daily View Goal:
 5. Enhanced Gemini prompt for 2000+ word evergreen content and 10+ source links (Strategy #5 & #6).
 6. Added blog-wide view tracking for performance scaling insight (Strategy #7).
 7. Target Audience is set to United States (Strategy #8).
-8. **NEW:** Added model fallback logic (flash -> flash-lite) for robust operation.
+8. Added model fallback logic (flash -> flash-lite) for robust operation.
+9. **NEW:** Modified prompt to enforce title variety (Guide, Emotional, Listicle).
 """
 
 # ============================================================
@@ -32,7 +33,7 @@ from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from google.api_core import exceptions as gapi_exceptions # Import specific Google API exceptions
+from google.api_core import exceptions as gapi_exceptions 
 
 # Blogger API Imports
 from googleapiclient.discovery import build
@@ -77,7 +78,7 @@ client = genai.Client(
     api_key=GEMINI_API_KEY
 )
 
-# NEW: Define the primary model and the fallback model
+# Define the primary model and the fallback model
 MODEL_PREFERENCE = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 SCHEMA = types.Schema(
@@ -160,7 +161,7 @@ def get_trending_topics(keywords: List[str] = None) -> List[str]:
 
 
 # ============================================================
-# Gemini Content Generation - Strategy #5 & #6 (WITH FALLBACK)
+# Gemini Content Generation - Strategy #5 & #6 (WITH FALLBACK AND VARIETY)
 # ============================================================
 def generate_post(trending_topic: str) -> Dict[str, Any]:
     """Generates an evergreen, SEO-heavy blog post based on a trending topic, using fallback models."""
@@ -180,7 +181,10 @@ def generate_post(trending_topic: str) -> Dict[str, Any]:
 **STRUCTURE & REQUIREMENTS (CRITICAL for SEO and 1000+ Daily Views):**
 
 1.  **Content Length:** MUST exceed 2000 words. Achieve this by providing deep analysis, historical context, and comprehensive safety guides.
-2.  **Title & Meta:** The `title` MUST be highly emotional, curiosity-driven, or a comprehensive "Ultimate Guide" for maximum CTR.
+2.  **Title & Meta (NEW VARIETY):** The `title` MUST be highly emotional, curiosity-driven, or a comprehensive guide for maximum CTR. **VARY the title format** using one of the following high-impact styles for each post:
+    * **Style 1 (Utility/Guide):** Use phrases like "The Ultimate Guide," "Complete Blueprint," or "Master Checklist."
+    * **Style 2 (Emotional/Shock):** Use phrases like "The Shocking Truth About...," "Hidden Dangers of...," or "Why You Must Prepare for..."
+    * **Style 3 (Listicle/Actionable):** Use numbered lists like "5 Ways to Prepare for...," "3 Essential Steps to...," or "7 Things to Know About..."
 3.  **Source Linking (Strategy #5):** Include **more than 10** distinct, high-authority external hyperlinks (`<a href="...">...</a>`) spread throughout the content. These links must point to **plausible, high-authority sources** in the US (NOAA, FEMA, CDC, specific state/local government sites, academic journals). **Invent these link URLs and link text to be highly relevant to the content you generate.** Example: `<a href="https://www.fema.gov/disaster-safety/tornadoes">FEMA Tornado Safety Checklist</a>`.
 4.  **Evergreen Sections (Strategy #6):** The content must be framed as a long-term resource. Include sections like:
     * **Historical Impact:** How has this type of weather event impacted the US in the last 10-20 years?
@@ -194,7 +198,7 @@ def generate_post(trending_topic: str) -> Dict[str, Any]:
 - The `content_html` field must contain ALL content.
 """
     
-    # NEW: Loop through the preferred models for fallback logic
+    # Loop through the preferred models for fallback logic
     for model_name in MODEL_PREFERENCE:
         log.info("Generating post content for topic: %s using model: %s", trending_topic, model_name)
         
@@ -235,10 +239,26 @@ BLOGGER_SCOPE = ["https://www.googleapis.com/auth/blogger"]
 ARCHIVE_PAGE_TITLE = "Blog Index/Archive"
 
 def get_authenticated_service():
-# ... (rest of get_authenticated_service, get_existing_post_id, get_blog_page_views remain unchanged)
-# ... (publish_or_update_post remains unchanged)
-# ... (update_archive_page remains unchanged)
-# ... (main remains unchanged, but uses POSTS_PER_RUN=4)
+    """ Handles OAuth 2.0 flow and returns an authenticated Blogger service."""
+    creds = None
+    if TOKEN_FILE.exists():
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, BLOGGER_SCOPE)
+        except Exception:
+            pass 
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            log.warning("Starting interactive OAuth 2.0 flow. Run this script locally ONCE to generate token.json.")
+            flow = InstalledAppFlow.from_client_secrets_file(
+                CLIENT_SECRETS_FILE, BLOGGER_SCOPE
+            )
+            creds = flow.run_local_server(port=0)
+
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
 
     return build('blogger', 'v3', credentials=creds)
 
@@ -358,6 +378,7 @@ def publish_or_update_post(post: Dict[str, Any], blog_id: str):
         log.error("Failed to interact with Blogger API (HTTP Error: %s).", e.resp.status)
     except Exception as e:
         log.error("An unexpected error occurred during publishing: %s", e)
+
 
 # ============================================================
 # Archive Page Management (SEO Crawl Depth)
@@ -484,7 +505,7 @@ def main():
 
         try:
             # 3. Generate Content (Evergreen, 10+ links, US Audience)
-            # This call now includes model fallback logic
+            # This call now includes model fallback logic and the new title variety instruction
             post = generate_post(topic)
             
             # 4. Save a local backup
@@ -504,7 +525,7 @@ def main():
 
         except Exception as e:
             log.error("CRITICAL ERROR during post generation/publishing for topic %s: %s. Continuing to next post.", topic, e)
-            # We continue the loop here, as the critical error was handled inside generate_post
+            # The error for model failure is handled inside generate_post, so we continue the main loop here.
             continue
             
     log.info("Completed run of %d posts.", POSTS_PER_RUN)
