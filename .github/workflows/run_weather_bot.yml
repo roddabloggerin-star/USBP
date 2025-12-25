@@ -54,8 +54,8 @@ jobs:
       # Run the main script
       - name: Run Weather Blog Bot
         run: |
-          # We use direct path execution for better script portability and clarity.
-          python main.py # Ensure this path is correct if your file is in the root directory
+          # FIX: Explicitly run the script from the current directory
+          python ./main.py 
 
       # 🌟 CRITICAL CHANGE: Commit the state file back to the repository
       - name: Commit and Push State File
