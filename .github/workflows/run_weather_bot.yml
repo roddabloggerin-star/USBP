@@ -54,8 +54,9 @@ jobs:
       # Run the main script
       - name: Run Weather Blog Bot
         run: |
-          # FIX: Explicitly run the script from the current directory
-          python ./main.py 
+          # FIX: Assumes main.py is in the 'src/' subdirectory.
+          # If your file is in a different folder, replace 'src/'.
+          python src/main.py 
 
       # 🌟 CRITICAL CHANGE: Commit the state file back to the repository
       - name: Commit and Push State File
