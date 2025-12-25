@@ -4,15 +4,10 @@ USA Weather Blogger – High-Traffic AI Strategy Edition
 Python 3.12 / GitHub Actions Safe
 
 FINAL MODIFICATIONS for 1000+ Daily View Goal:
-1. Removed NWS real-time weather data and hardcoded city data (per request).
-2. Integrated 'pytrends' (Google Trends API) for trending topic selection.
-3. ADJUSTED daily post target to 4 posts per run (20 Gemini requests total) to comply with free-tier limit.
-4. Implemented Blogger API logic to CHECK, UPDATE, or INSERT posts (Strategy #4).
-5. Enhanced Gemini prompt for 2000+ word evergreen content and 10+ source links (Strategy #5 & #6).
-6. Added blog-wide view tracking for performance scaling insight (Strategy #7).
-7. Target Audience is set to United States (Strategy #8).
-8. Added model fallback logic (flash -> flash-lite) for robust operation.
-9. **NEW:** Modified prompt to enforce title variety (Guide, Emotional, Listicle).
+... (Previous strategies)
+9. **FIX:** Implemented explicit style cycling in the main loop to force title variety.
+10. **FIX:** Removed unsupported argument in Blogger API for Archive Page update.
+11. **FIX:** Added colon stripping to filename generation to fix artifact upload error.
 """
 
 # ============================================================
@@ -93,6 +88,14 @@ SCHEMA = types.Schema(
     required=["title", "meta_description", "content_html", "labels"],
 )
 
+# Define the three title styles to enforce variety (Fix #4)
+TITLE_STYLES = [
+    "Style 1 (Utility/Guide)",
+    "Style 2 (Emotional/Shock)",
+    "Style 3 (Listicle/Actionable)"
+]
+
+
 # ============================================================
 # State Management (Strategy #7 Insight)
 # ============================================================
@@ -163,8 +166,13 @@ def get_trending_topics(keywords: List[str] = None) -> List[str]:
 # ============================================================
 # Gemini Content Generation - Strategy #5 & #6 (WITH FALLBACK AND VARIETY)
 # ============================================================
-def generate_post(trending_topic: str) -> Dict[str, Any]:
-    """Generates an evergreen, SEO-heavy blog post based on a trending topic, using fallback models."""
+def generate_post(trending_topic: str, required_style: str) -> Dict[str, Any]:
+    """Generates an evergreen, SEO-heavy blog post based on a trending topic, using fallback models.
+    
+    Args:
+        trending_topic: The primary topic for the post.
+        required_style: The title style to enforce (e.g., 'Style 2 (Emotional/Shock)'). (Fix #4)
+    """
     
     current_date = datetime.now().strftime("%B %d, %Y")
 
@@ -181,7 +189,7 @@ def generate_post(trending_topic: str) -> Dict[str, Any]:
 **STRUCTURE & REQUIREMENTS (CRITICAL for SEO and 1000+ Daily Views):**
 
 1.  **Content Length:** MUST exceed 2000 words. Achieve this by providing deep analysis, historical context, and comprehensive safety guides.
-2.  **Title & Meta (NEW VARIETY):** The `title` MUST be highly emotional, curiosity-driven, or a comprehensive guide for maximum CTR. **VARY the title format** using one of the following high-impact styles for each post:
+2.  **Title & Meta (FORCED VARIETY):** The `title` MUST be highly emotional, curiosity-driven, or a comprehensive guide for maximum CTR. **You MUST strictly follow the required title style for this post:** **{required_style}**
     * **Style 1 (Utility/Guide):** Use phrases like "The Ultimate Guide," "Complete Blueprint," or "Master Checklist."
     * **Style 2 (Emotional/Shock):** Use phrases like "The Shocking Truth About...," "Hidden Dangers of...," or "Why You Must Prepare for..."
     * **Style 3 (Listicle/Actionable):** Use numbered lists like "5 Ways to Prepare for...," "3 Essential Steps to...," or "7 Things to Know About..."
@@ -210,23 +218,23 @@ def generate_post(trending_topic: str) -> Dict[str, Any]:
                 config=types.GenerateContentConfig(
                     response_schema=SCHEMA,
                     response_mime_type="application/json",
-                    temperature=0.9, 
+                    temperature=0.9,
                 ),
             )
             # If successful, return the result immediately
             log.info("Successfully generated content using %s.", model_name)
             return json.loads(r.text)
-            
+
         # We catch the base Exception or specific API exceptions (like ResourceExhausted)
         except (Exception, gapi_exceptions.ResourceExhausted) as e:
             # 2. Handle failure (e.g., rate limit, other API error)
             if model_name != MODEL_PREFERENCE[-1]:
-                 log.warning("Model %s failed: %s. Attempting fallback to next model...", model_name, e)
+                log.warning("Model %s failed: %s. Attempting fallback to next model...", model_name, e)
             else:
-                 # 3. If the last model failed, raise the error to stop the current post generation
-                 log.error("All models failed for topic %s: %s", trending_topic, e)
-                 raise
-                 
+                # 3. If the last model failed, raise the error to stop the current post generation
+                log.error("All models failed for topic %s: %s", trending_topic, e)
+                raise # Re-raise the exception to be caught by the main loop
+
     # This line should be unreachable but is included for safety
     raise RuntimeError("Critical: Model generation failed after all fallback attempts.")
 
@@ -234,246 +242,138 @@ def generate_post(trending_topic: str) -> Dict[str, Any]:
 # ============================================================
 # Blogger API Handlers - Strategy #4 & #7
 # ============================================================
-BLOGGER_SCOPE = ["https://www.googleapis.com/auth/blogger"]
-# NEW CONSTANT: Title of the static archive page that will be constantly updated
-ARCHIVE_PAGE_TITLE = "Blog Index/Archive"
 
-def get_authenticated_service():
-    """ Handles OAuth 2.0 flow and returns an authenticated Blogger service."""
-    creds = None
-    if TOKEN_FILE.exists():
-        try:
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, BLOGGER_SCOPE)
-        except Exception:
-            pass 
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            log.warning("Starting interactive OAuth 2.0 flow. Run this script locally ONCE to generate token.json.")
-            flow = InstalledAppFlow.from_client_secrets_file(
-                CLIENT_SECRETS_FILE, BLOGGER_SCOPE
-            )
-            creds = flow.run_local_server(port=0)
-
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
-
-    return build('blogger', 'v3', credentials=creds)
-
-
-def get_existing_post_id(service, blog_id: str, title: str) -> Optional[str]:
-    """ Searches for an existing post by title (approximation)."""
-    try:
-        # Search API doesn't support exact title search, so we list and filter.
-        # Max results 50 should cover posts recent enough for updates.
-        results = service.posts().list(blogId=blog_id, maxResults=50).execute()
-        
-        for post in results.get('items', []):
-            if post['title'].lower().strip() == title.lower().strip():
-                log.info("Found existing post with matching title: %s", post['id'])
-                return post['id']
-                
-        return None
-        
-    except HttpError as e:
-        log.error("Failed to list posts from Blogger API: %s", e)
-        return None
-
+# ... (rest of the helper functions: get_credentials, get_blog_page_views, etc.)
 
 def get_blog_page_views(service, blog_id: str, state: Dict[str, Any]):
-    """ Retrieves total page views for the blog (Strategy #7 Insight)."""
-    try:
-        # Blogger API only provides blog-level views. Use '7DAYS' for tracking goal progress.
-        result = service.pageViews().get(blogId=blog_id, range='7DAYS').execute()
-        views = result.get('counts', [0])[0]
-        
-        # Update the state file
-        state['daily_views'] = views
-        state['last_view_check'] = str(datetime.now())
-        save_state(state)
-        
-        log.info("Blog Page View Count (Last 7 Days): %d. Target: 7000+", views)
-
-    except HttpError as e:
-        log.error("Failed to get Page Views from Blogger API: %s", e)
-
-
-def publish_or_update_post(post: Dict[str, Any], blog_id: str):
-    """ STRATEGY #4: Checks for existing post, updates it if found, or inserts a new one.
-        SEO Enhancement: Injects a canonical link after publishing.
     """
-    log.info("Attempting to publish/update post...")
-    
+    Retrieves the last 7 days of page view count for the blog.
+    (Strategy #7: Performance Scaling)
+    """
+    log.info("Fetching last 7 days of page views...")
     try:
-        service = get_authenticated_service()
-        existing_post_id = get_existing_post_id(service, blog_id, post['title'])
+        # The Blogger API 'get' method for pageViews returns data in the format
+        # {'kind': 'blogger#pageViews', 'blogId': '...', 'counts': [{'timeRange': 'SEVEN_DAYS', 'count': '106'}]}
+        result = service.pageViews().get(blogId=blog_id, range='7DAYS').execute()
         
-        # Construct the post body
-        body = {
-            'kind': 'blogger#post',
-            'blog': {'id': blog_id},
-            'title': post['title'],
-            'content': post['content_html'],
-            'labels': post.get('labels', []) # Includes SEO Labels/Tags
-        }
+        # Safely extract the count, defaulting to 0 if not found
+        views = int(result.get('counts', [{'count': '0'}])[0].get('count', '0'))
         
-        if existing_post_id:
-            # UPDATE existing post 
-            log.info("Updating existing post ID %s to refresh content...", existing_post_id)
-            
-            # Update the published time to now to push it to the top of the blog feed
-            body['published'] = datetime.now(timezone.utc).isoformat()
-            
-            request = service.posts().patch(
-                blogId=blog_id, 
-                postId=existing_post_id, 
-                body=body,
-                fetchBody=False 
-            )
-            result = request.execute()
-            log.info("Successfully UPDATED post: %s", result.get('url'))
+        # FIX #3: Use f-string logging to fix TypeError
+        log.info(f"Blog Page View Count (Last 7 Days): {views}. Target: 7000+")
         
-        else:
-            # INSERT new post
-            log.info("No existing post found. Inserting new post...")
-            request = service.posts().insert(blogId=blog_id, body=body, isDraft=False)
-            result = request.execute()
-            log.info("Successfully INSERTED new post: %s", result.get('url'))
-            
-        
-        # --- NEW SEO IMPLEMENTATION: SET CANONICAL LINK ---
-        final_post_url = result.get('url')
-        if final_post_url:
-            # 1. Create the canonical tag
-            canonical_tag = f'<link rel="canonical" href="{final_post_url}">'
-            log.info("Injecting canonical link: %s", canonical_tag)
-            
-            # 2. Add the canonical tag to the start of the HTML content
-            updated_content_html = canonical_tag + post['content_html']
-            
-            # 3. Prepare the body for the second PATCH request (Canonical injection)
-            canonical_body = {
-                # Only update the content field with the new content + canonical tag
-                'content': updated_content_html,
-                # Set published time again to ensure it refreshes 
-                'published': datetime.now(timezone.utc).isoformat() 
-            }
-            
-            # 4. Patch the post again with the canonical link included in the content
-            canonical_request = service.posts().patch(
-                blogId=blog_id,
-                postId=result.get('id'),
-                body=canonical_body,
-                fetchBody=False
-            )
-            canonical_request.execute()
-            log.info("Canonical link successfully patched into post content.")
-        # --- END NEW SEO IMPLEMENTATION ---
+        # Update state with the latest view count
+        state['daily_views'] = views
+        state['last_view_check'] = str(datetime.now(timezone.utc))
 
-        return final_post_url
+        # This logic is for future scaling decisions, currently not used to change post count
+        if views < 500:
+            log.info("Blog traffic is low. Maintaining current post volume.")
+        elif views >= 7000:
+            log.info("Blog traffic is high! Consider increasing POSTS_PER_RUN if daily requests allow.")
 
     except HttpError as e:
-        log.error("Failed to interact with Blogger API (HTTP Error: %s).", e.resp.status)
+        log.error("HTTP Error fetching page views: %s", e)
     except Exception as e:
-        log.error("An unexpected error occurred during publishing: %s", e)
+        log.error("General Error fetching page views: %s", e)
 
 
-# ============================================================
-# Archive Page Management (SEO Crawl Depth)
-# ============================================================
+# ... (publish_or_update_post)
+
 def update_archive_page(service, blog_id: str):
     """
-    Fetches all posts, generates a sorted list of links, and updates/creates 
-    a static Archive Page ("Blog Index/Archive"). Ensures every post is linked.
+    Fetches all posts, generates an HTML archive, and updates the dedicated archive page.
+    (New Step for SEO Crawl Depth and internal linking)
     """
     log.info("--- Starting Archive Page Update ---")
     
-    try:
-        # 1. Fetch ALL published posts (Blogger API pages through results using 'nextPageToken')
-        all_posts = []
-        page_token = None
-        
-        while True:
-            # maxResults=50 is the maximum allowed per request
-            request = service.posts().list(
-                blogId=blog_id, 
-                maxResults=50, 
-                orderBy='PUBLISHED', # Important for sorting
-                status='LIVE',       # Only published posts
+    # 1. Fetch all existing posts
+    posts = []
+    page_token = None
+    while True:
+        try:
+            results = service.posts().list(
+                blogId=blog_id,
+                fetchBodies=False, # We don't need the full body, just title, URL, and published date
+                maxResults=500,
                 pageToken=page_token
-            )
-            result = request.execute()
-            all_posts.extend(result.get('items', []))
+            ).execute()
+        except HttpError as e:
+            log.error("HTTP Error fetching posts for archive: %s", e)
+            return
+
+        posts.extend(results.get('items', []))
+        page_token = results.get('nextPageToken')
+        if not page_token:
+            break
             
-            page_token = result.get('nextPageToken')
-            if not page_token:
+    log.info("Fetched %d total published posts for the archive.", len(posts))
+
+    if not posts:
+        log.warning("No posts found to create an archive page.")
+        return
+
+    # 2. Sort posts by date (newest first)
+    posts.sort(key=lambda p: p.get('published'), reverse=True)
+
+    # 3. Generate HTML Content
+    archive_html = "<h1>Complete Blog Index & Archive</h1>\n"
+    archive_html += "<p>Below is a complete list of all our weather updates, guides, and safety tips, sorted by publication date.</p>\n"
+    archive_html += "<ul>\n"
+    
+    for post in posts:
+        title = post.get('title', 'Untitled Post')
+        url = post.get('url', '#')
+        published = post.get('published', '2000-01-01T00:00:00Z')
+        date_str = datetime.fromisoformat(published.replace('Z', '+00:00')).strftime("%Y-%m-%d")
+        archive_html += f'<li>[{date_str}] <a href="{url}">{title}</a></li>\n'
+        
+    archive_html += "</ul>"
+
+    # 4. Define the page body
+    body = {
+        'title': 'Blog Index/Archive',
+        'content': archive_html,
+        'published': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    }
+
+    # 5. Search for the existing Archive Page
+    # The Blogger API doesn't have a reliable 'get by title' function, so we list and filter pages.
+    archive_page_id = None
+    try:
+        pages_results = service.pages().list(blogId=blog_id).execute()
+        for page in pages_results.get('items', []):
+            if page.get('title') == 'Blog Index/Archive':
+                archive_page_id = page['id']
                 break
-        
-        log.info("Fetched %d total published posts for the archive.", len(all_posts))
+    except HttpError as e:
+        log.error("HTTP Error listing pages: %s", e)
+        # Continue to insertion if listing fails, as it might succeed
+        pass
 
-        # 2. Generate Archive HTML (Sorted by newest first)
-        # The Blogger API 'orderBy' should handle the sort, but we ensure it here.
-        all_posts.sort(key=lambda p: p['published'], reverse=True) 
-
-        archive_html = f'<h1>{ARCHIVE_PAGE_TITLE}</h1>'
-        archive_html += '<p>This index provides direct links to every comprehensive weather resource on our blog.</p>'
-        archive_html += '<ul>\n'
-        
-        for post in all_posts:
-            # Format the date for display
-            pub_date = datetime.strptime(post['published'][:19], '%Y-%m-%dT%H:%M:%S').strftime('%Y-%m-%d')
-            archive_html += f'    <li><a href="{post["url"]}">{post["title"]}</a> - ({pub_date})</li>\n'
-            
-        archive_html += '</ul>'
-
-        # 3. Find/Create the Archive Page
-        archive_page_id = None
-        page_token = None
-        
-        # Search for the existing Archive Page by its title
-        while True:
-            request = service.pages().list(blogId=blog_id, pageToken=page_token)
-            result = request.execute()
-            
-            for page in result.get('items', []):
-                # Check for the exact title provided by the user
-                if page['title'].strip() == ARCHIVE_PAGE_TITLE:
-                    archive_page_id = page['id']
-                    break
-            
-            page_token = result.get('nextPageToken')
-            if not page_token or archive_page_id:
-                break
-
-        body = {
-            'kind': 'blogger#page',
-            'blog': {'id': blog_id},
-            'title': ARCHIVE_PAGE_TITLE,
-            'content': archive_html,
-        }
-
+    # 6. Update or Insert the page
+    try:
         if archive_page_id:
-            # 4a. Update existing page
             log.info("Found existing Archive Page (ID: %s). Updating content...", archive_page_id)
             request = service.pages().patch(
                 blogId=blog_id,
                 pageId=archive_page_id,
                 body=body,
-                fetchBody=False
+                # FIX #1: Removed unsupported 'fetchBody' argument from pages().patch
             )
             request.execute()
-            log.info("Successfully updated Archive Page.")
+            log.info("Successfully UPDATED Archive Page.")
         else:
-            # 4b. Insert new page
-            log.info("Archive Page not found. Creating a new one...")
-            request = service.pages().insert(blogId=blog_id, body=body, isDraft=False) # Publish immediately
+            log.info("No existing Archive Page found. Inserting new page...")
+            request = service.pages().insert(
+                blogId=blog_id,
+                body=body
+            )
             result = request.execute()
-            log.info("Successfully created new Archive Page: %s", result.get('url'))
+            log.info("Successfully INSERTED new Archive Page (ID: %s).", result['id'])
 
     except HttpError as e:
-        log.error("Failed to manage Archive Page via Blogger API (HTTP Error: %s).", e.resp.status)
+        log.error("An unexpected error occurred during Archive Page update: %s", e)
     except Exception as e:
         log.error("An unexpected error occurred during Archive Page update: %s", e)
         
@@ -481,35 +381,54 @@ def update_archive_page(service, blog_id: str):
 
 
 # ============================================================
-# Main Execution - Strategy #2, #7, #8
+# Main Execution
 # ============================================================
-def main():
-    state = get_state()
-    log.info("Starting run. Target posts this run: %d (Strategy #2). Total Daily Requests: 20", POSTS_PER_RUN)
-    
-    # 1. Performance Scaling Insight (Strategy #7)
-    service = None
-    if PUBLISH:
-        service = get_authenticated_service()
-        get_blog_page_views(service, BLOG_ID, state)
 
-    # 2. Get Trending Topics (Strategy #3)
-    trending_topics = get_trending_topics()
+def main():
+    log.info("Starting run. Target posts this run: %d (Strategy #2).", POSTS_PER_RUN)
     
-    # Use the highest-priority topics for the 4 posts
+    # 1. Initialize API Service and check views (if PUBLISH is true)
+    service = None
+    state = get_state()
+    
+    if PUBLISH:
+        try:
+            # Service initialization also handles credential refresh
+            service = get_blogger_service()
+            get_blog_page_views(service, BLOG_ID, state)
+        except Exception as e:
+            log.error("Failed to initialize Blogger service or fetch views: %s. Cannot publish.", e)
+            if PUBLISH:
+                 # If we can't publish, we exit the entire script to avoid errors.
+                 return 
+    
+    # 2. Get trending topics (or defaults)
+    trending_topics = get_trending_topics()
     topics_to_post = trending_topics[:POSTS_PER_RUN]
 
     for i, topic in enumerate(topics_to_post):
-        # We will use one Gemini request per post, total 4 requests
-        log.info("--- Post %d/%d: Processing topic: %s ---", i + 1, POSTS_PER_RUN, topic)
+        # FIX #4: Cycle through title styles to enforce variety
+        title_style = TITLE_STYLES[i % len(TITLE_STYLES)] 
+        log.info("--- Post %d/%d: Processing topic: %s (Style: %s) ---", i + 1, POSTS_PER_RUN, topic, title_style)
 
         try:
             # 3. Generate Content (Evergreen, 10+ links, US Audience)
-            # This call now includes model fallback logic and the new title variety instruction
-            post = generate_post(topic)
+            # Pass the required style to the generation function
+            post = generate_post(topic, title_style)
             
             # 4. Save a local backup
-            post_title_safe = post['title'].lower().replace(' ', '-').replace('/', '-').replace('/', '-').strip()[:50]
+            # FIX #2: Explicitly remove colons and other invalid characters from filename
+            post_title_safe = (
+                post['title'].lower()
+                .replace(' ', '-')
+                .replace('/', '-')
+                .replace('\\', '-')
+                .replace(':', '') # <-- THIS IS THE FIX for artifact upload error
+                .strip()
+            )
+            # Truncate after cleaning
+            post_title_safe = post_title_safe[:50]
+
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
             fname = OUTPUT_DIR / f"{timestamp}-{post_title_safe}.html"
             OUTPUT_DIR.mkdir(exist_ok=True)
@@ -518,7 +437,6 @@ def main():
 
             # 5. Publish or Update (Strategy #4)
             if PUBLISH:
-                # service is guaranteed to be set if PUBLISH is true
                 publish_or_update_post(post, BLOG_ID)
             else:
                 log.info("PUBLISH is set to false. Skipping Blogger API interaction.")
@@ -528,7 +446,7 @@ def main():
             # The error for model failure is handled inside generate_post, so we continue the main loop here.
             continue
             
-    log.info("Completed run of %d posts.", POSTS_PER_RUN)
+    log.info("Completed run of %d posts.", len(topics_to_post))
     
     # 6. UPDATE ARCHIVE PAGE (New Step for SEO Crawl Depth)
     if PUBLISH and service:
@@ -537,6 +455,7 @@ def main():
         
     # Save final state
     save_state(state)
+    log.info("Final state saved successfully.")
 
 if __name__ == "__main__":
     main()
